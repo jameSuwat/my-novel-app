@@ -499,12 +499,29 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
 
 const FONT_MIN = 13;
 const FONT_MAX = 28;
+const FONT_SIZE_KEY = "novel-writer-font-size";
 
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title);
   const [content, setContent] = useState(chapter.content);
-  const [fontSize, setFontSize] = useState(17);
+  
+  // 🟢 ดึงค่าขนาดฟอนต์ล่าสุดที่เคยเซฟไว้ หากไม่มีจะใช้ค่า 17
+  const [fontSize, setFontSize] = useState(() => {
+    try {
+      const saved = localStorage.getItem(FONT_SIZE_KEY);
+      return saved ? Number(saved) : 17;
+    } catch (e) {
+      return 17;
+    }
+  });
   const contentRef = useRef(null);
+
+  // 🟢 บันทึกขนาดฟอนต์ลงเครื่องทุกครั้งที่มีการปรับขนาด
+  useEffect(() => {
+    try {
+      localStorage.setItem(FONT_SIZE_KEY, fontSize);
+    } catch (e) {}
+  }, [fontSize]);
 
   // Defensive reset: whenever we're handed a different chapter (new id, or a
   // fresh "new chapter" draft with a different order), clear the fields.
