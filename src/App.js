@@ -501,6 +501,7 @@ const FONT_MIN = 13;
 const FONT_MAX = 28;
 const FONT_SIZE_KEY = "novel-writer-font-size";
 const GEMINI_KEY_STORAGE = "novel-writer-gemini-key";
+const GEMINI_MODEL = "gemini-3.1-flash"; // 🟢 ระบุโมเดล Gemini 3.1
 
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title);
@@ -593,7 +594,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // 🤖 ฟังก์ชันส่งเนื้อหาให้ Gemini AI ตรวจคำพูดและคำผิด
+  // 🤖 ฟังก์ชันส่งเนื้อหาให้ Gemini 3.1 ตรวจคำพูดและคำผิด
   const handleGeminiProofread = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนกดตรวจครับ");
@@ -609,7 +610,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     }
 
     setIsAiProcessing(true);
-    setTypoNotice("🤖 Gemini กำลังอ่านและตรวจทานเนื้อหานิยายให้อยู่ครับ...");
+    setTypoNotice("🤖 Gemini 3.1 กำลังอ่านและตรวจทานเนื้อหานิยายให้อยู่ครับ...");
 
     try {
       const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทยมืออาชีพ หน้าที่ของคุณคือ:
@@ -621,8 +622,9 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
 เนื้อหานิยายที่ต้องตรวจ:
 ${content}`;
 
+      // 🟢 ส่ง Request ไปยัง Gemini 3.1
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${currentKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -642,12 +644,12 @@ ${content}`;
 
       if (aiFixedText) {
         setContent(aiFixedText.trim());
-        setTypoNotice("✨ Gemini ตรวจใส่เครื่องหมายคำพูด \"...\" และแก้คำผิดเรียบร้อยแล้ว!");
+        setTypoNotice("✨ Gemini 3.1 ตรวจใส่เครื่องหมายคำพูด \"...\" และแก้คำผิดเรียบร้อยแล้ว!");
       } else {
         throw new Error("ไม่ได้รับข้อมูลตอบกลับจาก AI");
       }
     } catch (err) {
-      alert("เกิดข้อผิดพลาด: " + err.message + "\n(หาก Key ผิด คุณสามารถกดปุ่ม 🔑 เพื่อตั้งค่า Key ใหม่ได้ครับ)");
+      alert("เกิดข้อผิดพลาด: " + err.message + "\n(หาก Key ผิด หรือยังไม่มีสิทธิ์ใช้โมเดลนี้ คุณสามารถกดปุ่ม 🔑 เพื่อตั้งค่า Key ใหม่ได้ครับ)");
     } finally {
       setIsAiProcessing(false);
       setTimeout(() => setTypoNotice(""), 4000);
@@ -794,7 +796,7 @@ ${content}`;
                   fontWeight: 600
                 }}
               >
-                {isAiProcessing ? "⏳ AI กำลังตรวจ..." : "🤖 AI ตรวจคำพูด & คำผิด"}
+                {isAiProcessing ? "⏳ AI กำลังตรวจ..." : "🤖 AI 3.1 ตรวจคำพูด & คำผิด"}
               </button>
 
               <button
