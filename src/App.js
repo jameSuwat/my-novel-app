@@ -511,17 +511,9 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  // 🟢 สเตตสำหรับระบบจัดการสรรพนาม (Popup Modal)
-  const [showPronounModal, setShowPronounModal] = useState(false);
-  const [detectedPronouns, setDetectedPronouns] = useState([]); // รายการที่ AI สแกนพบ
-  const [selectedPronoun, setSelectedPronoun] = useState(""); // คำที่เลือกจะเปลี่ยน
-  const [replacementWord, setReplacementWord] = useState(""); // คำใหม่ที่จะใช้แทน
-
-  // API Keys Input
   const [apiKeysInput, setApiKeysInput] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
   const [showKeyInput, setShowKeyInput] = useState(false);
 
-  // ดึงขนาดฟอนต์ล่าสุด
   const [fontSize, setFontSize] = useState(() => {
     try {
       const saved = localStorage.getItem(FONT_SIZE_KEY);
@@ -543,7 +535,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setContent(chapter.content || "");
   }, [chapter.id, chapter.order]);
 
-  // แก้อาการหน้าจอเด้งขึ้นบน
   useEffect(() => {
     if (contentRef.current) {
       const scrollContainer = contentRef.current.parentElement.parentElement;
@@ -556,7 +547,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     }
   }, [content, fontSize]);
 
-  // ฟังก์ชันจัดย่อหน้าอัตโนมัติ
   const handleAutoIndent = () => {
     if (!content) return;
     const formatted = content
@@ -571,7 +561,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setContent(formatted);
   };
 
-  // ฟังก์ชันกด Enter ขึ้นย่อหน้าใหม่
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -593,7 +582,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     }
   };
 
-  // คัดลอกเนื้อหา
   const handleCopyContent = () => {
     if (!content) return;
     navigator.clipboard.writeText(content);
@@ -609,8 +597,8 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       .filter((k) => k.length > 0);
   };
 
-  // ฟังก์ชันส่งตรวจย่อหน้าเดี่ยว (สำหรับปุ่ม AI ตรวจคำผิดปกติเดิม)
-  const fetchParagraphProofread = async (para, key) => {
+  // 🟢 ฟังก์ชันส่งพร้อมระบบ Auto-Retry และหน่วงเวลาป้องกันชน Rate Limit
+  const fetchWithRetry = async (para, key, retries = 3, delay = 2000) => {
     if (!para.trim()) return para;
 
     const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทย หน้าที่ของคุณคือ:
@@ -622,27 +610,39 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
 ข้อความ:
 ${para}`;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: promptText }] }]
-        })
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: promptText }] }]
+            })
+          }
+        );
+
+        const data = await response.json();
+        if (data.error) {
+          // ถ้าติด Quota ให้รอแล้วลองใหม่
+          if (data.error.code === 429 && attempt < retries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, delay * (attempt + 1)));
+            continue;
+          }
+          throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
+        }
+
+        const aiFixed = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        return aiFixed ? aiFixed.trim() : para;
+      } catch (err) {
+        if (attempt === retries - 1) throw err;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
-    );
-
-    const data = await response.json();
-    if (data.error) {
-      throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
     }
-
-    const aiFixed = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    return aiFixed ? aiFixed.trim() : para;
+    return para;
   };
 
-  // AI ตรวจคำพูด & คำผิดแบบกระจาย Multi-Key
   const handleGeminiProofread = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนกดตรวจครับ");
@@ -650,6 +650,7 @@ ${para}`;
     }
 
     let keyList = getActiveKeyList();
+
     if (keyList.length === 0) {
       const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ\n(หากมีหลายคีย์ ให้คั่นด้วยเครื่องหมายจุลภาค , หรือขึ้นบรรทัดใหม่):");
       if (!input) return;
@@ -660,156 +661,48 @@ ${para}`;
 
     setIsAiProcessing(true);
     setProgress(0);
-    setTypoNotice(`🤖 กระจายการตรวจด้วย ${keyList.length} API Key...`);
+    setTypoNotice(`🤖 เริ่มต้นตรวจทานด้วย ${keyList.length} API Keys...`);
 
     try {
       const paragraphs = content.split("\n\n");
       const total = paragraphs.length;
       const fixedParagraphs = new Array(total);
       let completedCount = 0;
-      const batchSize = keyList.length;
 
-      for (let i = 0; i < total; i += batchSize) {
-        const batchPromises = [];
-        for (let j = 0; j < batchSize && (i + j) < total; j++) {
-          const pIndex = i + j;
-          const currentKey = keyList[j % keyList.length];
+      // ส่งทีละกลุ่มย่อยแบบควบคุมความเร็ว ไม่ให้ยิงชนโควตา
+      for (let i = 0; i < total; i++) {
+        const para = paragraphs[i];
+        const currentKey = keyList[i % keyList.length];
 
-          const pPromise = fetchParagraphProofread(paragraphs[pIndex], currentKey)
-            .then((res) => {
-              fixedParagraphs[pIndex] = res;
-            })
-            .catch(() => {
-              fixedParagraphs[pIndex] = paragraphs[pIndex];
-            })
-            .finally(() => {
-              completedCount++;
-              const currentPercent = Math.round((completedCount / total) * 100);
-              setProgress(currentPercent);
-              setTypoNotice(`🤖 ตรวจทานขนาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
-            });
-
-          batchPromises.push(pPromise);
+        if (!para.trim()) {
+          fixedParagraphs[i] = para;
+          completedCount++;
+          continue;
         }
-        await Promise.all(batchPromises);
+
+        try {
+          fixedParagraphs[i] = await fetchWithRetry(para, currentKey);
+        } catch (err) {
+          console.error(`Paragraph ${i} error:`, err);
+          fixedParagraphs[i] = para; // ใช้ข้อความเดิมถ้าพยายามจนหมดสิทธิ์
+        }
+
+        completedCount++;
+        const currentPercent = Math.round((completedCount / total) * 100);
+        setProgress(currentPercent);
+        setTypoNotice(`🤖 กำลังตรวจทาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
+
+        // หน่วงเวลาเล็กน้อยระหว่างแต่ละย่อหน้า เพื่อป้องกันโควตาเต็ม
+        if (i < total - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
       }
 
       setContent(fixedParagraphs.join("\n\n"));
-      setTypoNotice(`✨ ตรวจสอบสลับด้วย ${keyList.length} คีย์เสร็จเรียบร้อยแล้ว!`);
+      setTypoNotice(`✨ ตรวจสอบเรียบร้อยสมบูรณ์แล้ว!`);
     } catch (err) {
       alert("เกิดข้อผิดพลาด: " + err.message);
       setTypoNotice("");
-    } finally {
-      setIsAiProcessing(false);
-      setTimeout(() => setTypoNotice(""), 4000);
-    }
-  };
-
-  // 🟢 1. สแกนหาสรรพนามในเนื้อหาผ่าน AI
-  const handleScanPronouns = async () => {
-    if (!content.trim()) {
-      alert("กรุณาใส่เนื้อหานิยายก่อนสแกนสรรพนามครับ");
-      return;
-    }
-
-    let keyList = getActiveKeyList();
-    if (keyList.length === 0) {
-      const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณก่อนครับ:");
-      if (!input) return;
-      setApiKeysInput(input);
-      localStorage.setItem(GEMINI_KEY_STORAGE, input);
-      keyList = [input.trim()];
-    }
-
-    setIsAiProcessing(true);
-    setTypoNotice("👥 AI กำลังสแกนหาสรรพนามในเนื้อหา...");
-
-    try {
-      const promptText = `วิเคราะห์เนื้อหานิยายนี้ แล้วดึงรายการ "คำสรรพนาม" ทั้งหมดที่ใช้แทนตัวบุคคล (เช่น ฉัน, เธอ, คุณ, เขา, แก, ผม, เรา, ข้า, เจ้า, นาย, ฯลฯ) ที่ปรากฏในเรื่อง
-ให้ตอบกลับมาเป็นรายการคำสรรพนามเหล่านั้น **ในรูปแบบ JSON Array ของสตริงธรรมดาเท่านั้น** ห้ามมีคำอธิบายอื่น เช่น ["ฉัน", "เธอ", "คุณ", "เขา"]
-
-เนื้อหานิยาย:
-${content}`;
-
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${keyList[0]}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }]
-          })
-        }
-      );
-
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
-
-      let rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
-      // ทำความสะอาดข้อความเพื่อดึงเฉพาะ Array
-      rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
-      const pronounsArray = JSON.parse(rawText);
-
-      if (pronounsArray && pronounsArray.length > 0) {
-        setDetectedPronouns(pronounsArray);
-        setSelectedPronoun(pronounsArray[0]);
-        setReplacementWord(pronounsArray[0]);
-        setShowPronounModal(true);
-        setTypoNotice("✨ สแกนหาสรรพนามสำเร็จ!");
-      } else {
-        alert("ไม่พบคำสรรพนามที่เด่นชัดในตอนนี้ครับ");
-      }
-    } catch (err) {
-      alert("เกิดข้อผิดพลาดในการสแกน: " + err.message);
-    } finally {
-      setIsAiProcessing(false);
-      setTimeout(() => setTypoNotice(""), 3000);
-    }
-  };
-
-  // 🟢 2. ยืนยันการเปลี่ยนสรรพนามทั้งตอนผ่าน AI
-  const handleApplyPronounReplacement = async () => {
-    if (!selectedPronoun || !replacementWord) {
-      alert("กรุณาระบุคำเดิมและคำใหม่ที่จะเปลี่ยนครับ");
-      return;
-    }
-
-    let keyList = getActiveKeyList();
-    setIsAiProcessing(true);
-    setShowPronounModal(false);
-    setTypoNotice(`👥 กำลังเปลี่ยนคำว่า "${selectedPronoun}" เป็น "${replacementWord}" ทั้งตอน...`);
-
-    try {
-      const promptText = `คุณคือบรรณาธิการนิยาย หน้าที่ของคุณคือ:
-แปลงคำสรรพนามคำว่า "${selectedPronoun}" ทั้งหมดในเนื้อหานิยายด้านล่างนี้ ให้เปลี่ยนเป็นคำว่า "${replacementWord}" โดยให้ปรับแต่งคำเชื่อม คำลงท้าย หรือบริบทโดยรอบให้สอดคล้องลื่นไหลตามหลักไวยากรณ์ภาษาไทย **ห้ามเปลี่ยนเนื้อหาหรือพล็อตอื่นเด็ดขาด**
-ตอบกลับเฉพาะเนื้อหานิยายที่แก้ไขแล้วเท่านั้น ห้ามมีคำเกริ่นใดๆ
-
-เนื้อหานิยาย:
-${content}`;
-
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${keyList[0]}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }]
-          })
-        }
-      );
-
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
-
-      const updatedContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (updatedContent) {
-        setContent(updatedContent.trim());
-        setTypoNotice(`✨ เปลี่ยนสรรพนามจาก "${selectedPronoun}" เป็น "${replacementWord}" สำเร็จเรียบร้อย!`);
-      } else {
-        throw new Error("ไม่ได้รับข้อมูลตอบกลับจาก AI");
-      }
-    } catch (err) {
-      alert("เกิดข้อผิดพลาด: " + err.message);
     } finally {
       setIsAiProcessing(false);
       setTimeout(() => setTypoNotice(""), 4000);
@@ -867,11 +760,10 @@ ${content}`;
         </div>
       </div>
 
-      {/* Popover สำหรับใส่หลาย API Keys */}
       {showKeyInput && (
         <form onSubmit={handleSaveKeys} style={{ background: "#2a3140", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
           <label style={{ fontSize: 12, color: "#c9a15a" }}>
-            🔑 วาง Gemini API Keys หลายๆ คีย์ได้ที่นี่ (แยกแต่ละคีย์ด้วยบรรทัดใหม่ หรือเครื่องหมาย , )
+            🔑 วาง Gemini API Keys หลายๆ คีย์ (แยกด้วยบรรทัดใหม่ หรือเครื่องหมาย , )
           </label>
           <textarea
             rows={3}
@@ -924,62 +816,7 @@ ${content}`;
       </div>
 
       {/* Writing area */}
-      <div style={{ flex: 1, overflowY: "auto", color: "#2a2318", position: "relative" }}>
-        
-        {/* 🟢 Popup Modal สำหรับเปลี่ยนสรรพนาม */}
-        {showPronounModal && (
-          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-            <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: "100%", maxWidth: 420, boxShadow: "0 10px 25px rgba(0,0,0,0.2)" }}>
-              <h3 style={{ margin: "0 0 12px 0", color: "#1a202a", fontSize: 18 }}>👥 จัดการและเปลี่ยนสรรพนาม</h3>
-              <p style={{ fontSize: 13, color: "#666", marginBottom: 16 }}>
-                เลือกคำสรรพนามที่ AI สแกนพบในตอนนี้ แล้วพิมพ์คำใหม่ที่ต้องการเปลี่ยนแทนที่:
-              </p>
-
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#444", marginBottom: 6 }}>1. เลือกคำสรรพนามเดิมที่ต้องการเปลี่ยน:</label>
-                <select
-                  value={selectedPronoun}
-                  onChange={(e) => {
-                    setSelectedPronoun(e.target.value);
-                    setReplacementWord(e.target.value);
-                  }}
-                  style={{ width: "100%", padding: "10px", borderRadius: 6, border: "1px solid #ccc", fontSize: 14, background: "#f9f9f9" }}
-                >
-                  {detectedPronouns.map((p, idx) => (
-                    <option key={idx} value={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#444", marginBottom: 6 }}>2. พิมพ์คำสรรพนามใหม่ที่ต้องการใช้แทน:</label>
-                <input
-                  type="text"
-                  value={replacementWord}
-                  onChange={(e) => setReplacementWord(e.target.value)}
-                  placeholder="เช่น ข้า, เจ้า, ใต้บาท, องค์ชาย..."
-                  style={{ width: "100%", padding: "10px", borderRadius: 6, border: "1px solid #ccc", fontSize: 14 }}
-                />
-              </div>
-
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => setShowPronounModal(false)}
-                  style={{ background: "#e0e0e0", border: "none", padding: "8px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, color: "#333" }}
-                >
-                  ยกเลิก
-                </button>
-                <button
-                  onClick={handleApplyPronounReplacement}
-                  style={{ background: "#c9a15a", border: "none", padding: "8px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, color: "#1a140a" }}
-                >
-                  ✨ ยืนยันเปลี่ยนทั้งตอน
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
+      <div style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
         <div style={{ padding: "20px 18px 60px" }}>
           <input
             value={title}
@@ -1004,25 +841,6 @@ ${content}`;
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              
-              {/* 🟢 ปุ่มสแกนสรรพนามใหม่ */}
-              <button
-                onClick={handleScanPronouns}
-                disabled={isAiProcessing}
-                style={{
-                  background: isAiProcessing ? "#d0c3a5" : "#3b4a6b",
-                  border: "1px solid #526694",
-                  color: "#fff",
-                  borderRadius: 6,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: isAiProcessing ? "wait" : "pointer",
-                  fontWeight: 600
-                }}
-              >
-                {isAiProcessing ? "⏳ กำลังสแกน..." : "👥 เช็กสรรพนาม"}
-              </button>
-
               <button
                 onClick={handleGeminiProofread}
                 disabled={isAiProcessing}
@@ -1121,7 +939,6 @@ ${content}`;
             }}
           />
 
-          {/* สรุปตัวอักษร */}
           <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
             <span>📝 {wordCount(content)} คำ</span>
             <span>•</span>
