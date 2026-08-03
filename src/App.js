@@ -530,7 +530,42 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTitle(chapter.title || "");
     setContent(chapter.content || "");
   }, [chapter.id, chapter.order]);
+// 🟢 ฟังก์ชันจัดย่อหน้าอัตโนมัติสำหรับเนื้อหาทั้งหมด
+  const handleAutoIndent = () => {
+    if (!content) return;
+    const formatted = content
+      .split("\n")
+      .map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return "";
+        return "    " + trimmed; // เพิ่มย่อหน้า 4 ช่อง
+      })
+      .filter((line, index, arr) => line !== "" || (index > 0 && arr[index - 1] !== ""))
+      .join("\n\n"); // เว้นบรรทัดระหว่างย่อหน้าให้อ่านง่าย
+    setContent(formatted);
+  };
 
+  // 🟢 ฟังก์ชันเมื่อกด Enter ให้ขึ้นบรรทัดใหม่พร้อมย่อหน้าทันที
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const { selectionStart, selectionEnd } = e.target;
+      const indent = "\n\n    "; // ขึ้นย่อหน้าใหม่ + เว้นระยะห่าง
+      const newContent =
+        content.substring(0, selectionStart) +
+        indent +
+        content.substring(selectionEnd);
+
+      setContent(newContent);
+
+      setTimeout(() => {
+        if (contentRef.current) {
+          contentRef.current.selectionStart = contentRef.current.selectionEnd =
+            selectionStart + indent.length;
+        }
+      }, 0);
+    }
+  };
   useEffect(() => {
   if (contentRef.current) {
     const scrollContainer = contentRef.current.parentElement.parentElement;
@@ -630,10 +665,33 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
               color: "#221d14",
             }}
           />
+         {/* 🟢 ปุ่มกดจัดย่อหน้าอัตโนมัติ */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: "#8a7c5e" }}>
+              💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
+            </span>
+            <button
+              onClick={handleAutoIndent}
+              style={{
+                background: "#efe6d3",
+                border: "1px solid #cabb98",
+                color: "#4a3f2a",
+                borderRadius: 6,
+                padding: "4px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                fontWeight: 600
+              }}
+            >
+              ✨ จัดย่อหน้าทั้งหมด
+            </button>
+          </div>
+
           <textarea
             ref={contentRef}
             value={content}
             onChange={(e) => setContent(e.target.value)}
+            onKeyDown={handleKeyDown}
             placeholder="เริ่มเขียนตอนนี้..."
             style={{
               width: "100%",
@@ -642,7 +700,8 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
               background: "transparent",
               resize: "none",
               fontSize: fontSize,
-              lineHeight: 1.9,
+              lineHeight: 2.1,
+              letterSpacing: "0.2px",
               color: "#2a2318",
               minHeight: "60vh",
             }}
