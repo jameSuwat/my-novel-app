@@ -500,14 +500,20 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
 const FONT_MIN = 13;
 const FONT_MAX = 28;
 const FONT_SIZE_KEY = "novel-writer-font-size";
+const GEMINI_KEY_STORAGE = "novel-writer-gemini-key";
 
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title);
   const [content, setContent] = useState(chapter.content);
   const [copied, setCopied] = useState(false);
   const [typoNotice, setTypoNotice] = useState("");
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
+  
+  // API Key State
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
+  const [showKeyInput, setShowKeyInput] = useState(false);
 
-  // ดึงขนาดฟอนต์ล่าสุดที่เคยเซฟไว้
+  // ดึงขนาดฟอนต์ล่าสุด
   const [fontSize, setFontSize] = useState(() => {
     try {
       const saved = localStorage.getItem(FONT_SIZE_KEY);
@@ -518,7 +524,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   });
   const contentRef = useRef(null);
 
-  // เซฟขนาดฟอนต์ลงเครื่อง
   useEffect(() => {
     try {
       localStorage.setItem(FONT_SIZE_KEY, fontSize);
@@ -529,6 +534,19 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTitle(chapter.title || "");
     setContent(chapter.content || "");
   }, [chapter.id, chapter.order]);
+
+  // แก้อาการหน้าจอเด้งขึ้นบน
+  useEffect(() => {
+    if (contentRef.current) {
+      const scrollContainer = contentRef.current.parentElement.parentElement;
+      const currentScroll = scrollContainer.scrollTop;
+
+      contentRef.current.style.height = "auto";
+      contentRef.current.style.height = contentRef.current.scrollHeight + "px";
+
+      scrollContainer.scrollTop = currentScroll;
+    }
+  }, [content, fontSize]);
 
   // ฟังก์ชันจัดย่อหน้าอัตโนมัติ
   const handleAutoIndent = () => {
@@ -545,7 +563,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setContent(formatted);
   };
 
-  // ฟังก์ชันกด Enter แล้วขึ้นย่อหน้าใหม่ทันที
+  // ฟังก์ชันกด Enter ขึ้นย่อหน้าใหม่
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -567,20 +585,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     }
   };
 
-  // แก้อาการหน้าจอเด้งขึ้นบน
-  useEffect(() => {
-    if (contentRef.current) {
-      const scrollContainer = contentRef.current.parentElement.parentElement;
-      const currentScroll = scrollContainer.scrollTop;
-
-      contentRef.current.style.height = "auto";
-      contentRef.current.style.height = contentRef.current.scrollHeight + "px";
-
-      scrollContainer.scrollTop = currentScroll;
-    }
-  }, [content, fontSize]);
-
-  // ฟังก์ชันคัดลอกเนื้อหาทั้งหมด
+  // คัดลอกเนื้อหา
   const handleCopyContent = () => {
     if (!content) return;
     navigator.clipboard.writeText(content);
@@ -588,106 +593,75 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // ฟังก์ชันตรวจคำผิดและแก้ฟอร์แมตภาษาไทยอัตโนมัติ
-  const handleCheckAndFixTypos = () => {
-    if (!content) return;
-    let fixed = content;
-    let fixesCount = 0;
-
-    // 1. แก้ 'เเ' (สระเอซ้ำสองตัว) ให้เป็น 'แ' (สระแอ)
-    const doubleECount = (fixed.match(/เเ/g) || []).length;
-    if (doubleECount > 0) {
-      fixesCount += doubleECount;
-      fixed = fixed.replace(/เเ/g, "แ");
+  // 🤖 ฟังก์ชันส่งเนื้อหาให้ Gemini AI ตรวจคำพูดและคำผิด
+  const handleGeminiProofread = async () => {
+    if (!content.trim()) {
+      alert("กรุณาใส่เนื้อหานิยายก่อนกดตรวจครับ");
+      return;
     }
 
-    // 2. เคลียร์ช่องว่างซ้ำซ้อน (Spacebar เกิน 2 ช่องติดกันที่ไม่ใช่ย่อหน้า)
-    const spaceFixed = fixed.replace(/([^ \n])  +([^ \n])/g, "$1 $2");
-    if (spaceFixed !== fixed) {
-      fixesCount += 1;
-      fixed = spaceFixed;
+    let currentKey = apiKey.trim();
+    if (!currentKey) {
+      currentKey = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ (ใส่ครั้งเดียว ระบบจะจำไว้ในเครื่องครับ):");
+      if (!currentKey) return;
+      setApiKey(currentKey);
+      localStorage.setItem(GEMINI_KEY_STORAGE, currentKey);
     }
 
-    // 3. จัดเว้นวรรคไม้ยมก (ๆ) ให้ถูกต้องตามหลักภาษาไทย
-    const yamokFixed = fixed.replace(/([^ \n])ๆ/g, "$1 ๆ").replace(/ๆ([^ \n])/g, "ๆ $1");
-    if (yamokFixed !== fixed) {
-      fixesCount += 1;
-      fixed = yamokFixed;
-    }
+    setIsAiProcessing(true);
+    setTypoNotice("🤖 Gemini กำลังอ่านและตรวจทานเนื้อหานิยายให้อยู่ครับ...");
 
-    setContent(fixed);
+    try {
+      const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทยมืออาชีพ หน้าที่ของคุณคือ:
+1. ตรวจหาบทสนทนาหรือคำพูดตัวละครที่ขาดเครื่องหมายคำพูด "..." แล้วเติมเครื่องหมาย "..." ครอบคำพูดให้อย่างถูกต้องตามบริบท
+2. แก้ไขคำพิมพ์ผิด ตัวการันต์ สระเอซ้ำ (เเ -> แ) และจัดเว้นวรรคไม้ยมก (ๆ) ให้ถูกต้อง
+3. **ห้าม** แก้ไขเนื้อหา สำนวนการเขียน หรือสไตล์ของนักเขียนเด็ดขาด
+4. ตอบกลับเฉพาะเนื้อหานิยายที่ได้รับการแก้ไขแล้วเท่านั้น ห้ามมีคำเกริ่น คำอธิบาย หรือสัญลักษณ์ Markdown อื่นๆ
 
-    if (fixesCount > 0) {
-      setTypoNotice(`✨ แก้ไขจุดพิมพ์ผิด/เว้นวรรคให้แล้ว ${fixesCount} จุด!`);
-    } else {
-      setTypoNotice("✓ ไม่พบคำพิมพ์ผิดยอดฮิต (สระเอซ้ำ/ไม้ยมกติด/เว้นวรรคเกิน)");
+เนื้อหานิยายที่ต้องตรวจ:
+${content}`;
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${currentKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }]
+          })
+        }
+      );
+
+      const data = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
+      }
+
+      const aiFixedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (aiFixedText) {
+        setContent(aiFixedText.trim());
+        setTypoNotice("✨ Gemini ตรวจใส่เครื่องหมายคำพูด \"...\" และแก้คำผิดเรียบร้อยแล้ว!");
+      } else {
+        throw new Error("ไม่ได้รับข้อมูลตอบกลับจาก AI");
+      }
+    } catch (err) {
+      alert("เกิดข้อผิดพลาด: " + err.message + "\n(หาก Key ผิด คุณสามารถกดปุ่ม 🔑 เพื่อตั้งค่า Key ใหม่ได้ครับ)");
+    } finally {
+      setIsAiProcessing(false);
+      setTimeout(() => setTypoNotice(""), 4000);
     }
-    setTimeout(() => setTypoNotice(""), 3500);
   };
 
-  // 🟢 💬 ฟังก์ชันตรวจและใส่เครื่องหมายคำพูด "..." อัตโนมัติ
-  const handleFixDialogueQuotes = () => {
-    if (!content) return;
-
-    // กรณีไฮไลต์คลุมดำข้อความ: ใส่/ถอดเครื่องหมาย "..." ครอบข้อความทันที
-    if (contentRef.current) {
-      const { selectionStart, selectionEnd } = contentRef.current;
-      if (selectionStart !== selectionEnd) {
-        const selectedText = content.substring(selectionStart, selectionEnd);
-        const wrapped = (selectedText.startsWith('"') && selectedText.endsWith('"'))
-          ? selectedText.slice(1, -1)
-          : `"${selectedText}"`;
-        const newContent = content.substring(0, selectionStart) + wrapped + content.substring(selectionEnd);
-        setContent(newContent);
-        setTypoNotice('✨ ใส่เครื่องหมาย "..." ครอบข้อความที่เลือกเรียบร้อย!');
-        setTimeout(() => setTypoNotice(""), 3000);
-        return;
-      }
-    }
-
-    let fixed = content;
-    let fixesCount = 0;
-
-    // 1. แปลงอัญประกาศแบบอื่นๆ (“ ” 「 」) ให้เป็น " " เพื่อความเป็นระเบียบมาตรฐาน
-    const quoteStandardized = fixed.replace(/[“”「」]/g, '"').replace(/[‘’]/g, "'");
-    if (quoteStandardized !== fixed) {
-      fixesCount++;
-      fixed = quoteStandardized;
-    }
-
-    // 2. ตรวจหาคำกริยานำคำพูดที่ยังไม่มี " " ตามหลัง เช่น พูดว่า..., ตอบว่า..., ถามว่า...
-    const dialogueVerbRegex = /(พูดว่า|ถามว่า|ตอบว่า|บอกว่า|ตะโกนว่า|กระซิบว่า|อุทานว่า|พึมพำว่า|กระเซ้าว่า|แย้งว่า)\s*([^"\n\r]+)/g;
-    const newFixed = fixed.replace(dialogueVerbRegex, (match, verb, speech) => {
-      const trimmedSpeech = speech.trim();
-      if (!trimmedSpeech || trimmedSpeech.startsWith('"')) return match;
-      fixesCount++;
-      return `${verb} "${trimmedSpeech}"`;
-    });
-    fixed = newFixed;
-
-    // 3. ตรวจหาบรรทัดที่มี " เปิดค้างไว้แต่ลืมปิดท้ายบรรทัด
-    const lines = fixed.split("\n");
-    const fixedLines = lines.map(line => {
-      const quoteCount = (line.match(/"/g) || []).length;
-      if (quoteCount % 2 !== 0) {
-        fixesCount++;
-        return line.trimEnd() + '"';
-      }
-      return line;
-    });
-    fixed = fixedLines.join("\n");
-
-    setContent(fixed);
-
-    if (fixesCount > 0) {
-      setTypoNotice(`✨ เติม/จัดระเบียบเครื่องหมายคำพูด "..." ให้แล้ว ${fixesCount} จุด!`);
-    } else {
-      setTypoNotice('✓ ไม่พบคำพูดที่ขาดเครื่องหมาย (หรือลองคลุมดำข้อความแล้วกดปุ่มนี้เพื่อใส่ "..." ได้ครับ)');
-    }
-    setTimeout(() => setTypoNotice(""), 4000);
+  // บันทึก/เปลี่ยน API Key
+  const handleSaveKey = (e) => {
+    e.preventDefault();
+    localStorage.setItem(GEMINI_KEY_STORAGE, apiKey.trim());
+    setShowKeyInput(false);
+    alert("บันทึก Gemini API Key เรียบร้อยแล้ว!");
   };
 
-  // คำนวณจำนวนตัวอักษร
   const charCountTotal = content ? content.length : 0;
   const charCountNoSpaces = content ? content.replace(/\s+/g, "").length : 0;
 
@@ -708,7 +682,14 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
         <button onClick={onCancel} style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
           <ChevronLeft size={18} /> ปิด
         </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={() => setShowKeyInput(!showKeyInput)}
+            title="ตั้งค่า Gemini API Key"
+            style={{ background: "none", border: "1px solid #3a4454", color: "#c9a15a", cursor: "pointer", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}
+          >
+            🔑 API Key
+          </button>
           {onDelete && (
             <button onClick={onDelete} style={{ background: "none", border: "none", color: "#a85a5a", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
               <Trash2 size={16} />
@@ -723,7 +704,23 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
         </div>
       </div>
 
-      {/* Sub-bar: chapter label + font size control */}
+      {/* Popover สำหรับใส่ API Key */}
+      {showKeyInput && (
+        <form onSubmit={handleSaveKey} style={{ background: "#2a3140", padding: "10px 16px", display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            type="password"
+            placeholder="วาง Gemini API Key ที่นี่..."
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            style={{ flex: 1, padding: "6px 10px", borderRadius: 4, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12 }}
+          />
+          <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
+            บันทึก Key
+          </button>
+        </form>
+      )}
+
+      {/* Sub-bar */}
       <div
         style={{
           flexShrink: 0,
@@ -741,7 +738,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <button
             onClick={() => setFontSize((s) => Math.max(FONT_MIN, s - 1))}
-            aria-label="ลดขนาดตัวอักษร"
             style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
           >
             ก-
@@ -751,7 +747,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
           </span>
           <button
             onClick={() => setFontSize((s) => Math.min(FONT_MAX, s + 1))}
-            aria-label="เพิ่มขนาดตัวอักษร"
             style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 15, fontWeight: 700 }}
           >
             ก+
@@ -759,7 +754,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
         </div>
       </div>
 
-      {/* Full-bleed writing area */}
+      {/* Writing area */}
       <div style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
         <div style={{ padding: "20px 18px 60px" }}>
           <input
@@ -779,42 +774,27 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             }}
           />
 
-          {/* 🟢 โซนปุ่มเครื่องมือช่วยเขียน */}
+          {/* โซนปุ่มเครื่องมือ */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
             <span style={{ fontSize: 12, color: "#8a7c5e" }}>
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button
-                onClick={handleFixDialogueQuotes}
+                onClick={handleGeminiProofread}
+                disabled={isAiProcessing}
                 style={{
-                  background: "#efe6d3",
-                  border: "1px solid #cabb98",
-                  color: "#4a3f2a",
+                  background: isAiProcessing ? "#d0c3a5" : "#1a202a",
+                  border: "1px solid #c9a15a",
+                  color: "#c9a15a",
                   borderRadius: 6,
                   padding: "4px 10px",
                   fontSize: 12,
-                  cursor: "pointer",
+                  cursor: isAiProcessing ? "wait" : "pointer",
                   fontWeight: 600
                 }}
               >
-                💬 ตรวจ/ใส่ "..."
-              </button>
-
-              <button
-                onClick={handleCheckAndFixTypos}
-                style={{
-                  background: "#efe6d3",
-                  border: "1px solid #cabb98",
-                  color: "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600
-                }}
-              >
-                🔍 ตรวจแก้คำผิด
+                {isAiProcessing ? "⏳ AI กำลังตรวจ..." : "🤖 AI ตรวจคำพูด & คำผิด"}
               </button>
 
               <button
@@ -852,9 +832,9 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             </div>
           </div>
 
-          {/* แสดงข้อความแจ้งเตือนผลการตรวจ */}
+          {/* ข้อความแจ้งเตือน */}
           {typoNotice && (
-            <div style={{ background: "#e2f0d9", border: "1px solid #b2d8a0", color: "#2e5b1e", padding: "6px 12px", borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
+            <div style={{ background: "#e2f0d9", border: "1px solid #b2d8a0", color: "#2e5b1e", padding: "8px 12px", borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
               {typoNotice}
             </div>
           )}
@@ -865,8 +845,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="เริ่มเขียนตอนนี้..."
-            spellCheck={true}
-            lang="th"
             style={{
               width: "100%",
               border: "none",
@@ -881,7 +859,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             }}
           />
 
-          {/* สรุปจำนวนคำและตัวอักษร */}
+          {/* สรุปตัวอักษร */}
           <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
             <span>📝 {wordCount(content)} คำ</span>
             <span>•</span>
