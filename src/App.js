@@ -504,7 +504,15 @@ const FONT_SIZE_KEY = "novel-writer-font-size";
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title);
   const [content, setContent] = useState(chapter.content);
-  
+  // 🟢 เพิ่ม State และฟังก์ชันคัดลอกเนื้อหา
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyContent = () => {
+    if (!content) return;
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000); // คืนค่าปุ่มเดิมหลังผ่านไป 2 วินาที
+  };
   // 🟢 ดึงค่าขนาดฟอนต์ล่าสุดที่เคยเซฟไว้ หากไม่มีจะใช้ค่า 17
   const [fontSize, setFontSize] = useState(() => {
     try {
@@ -670,21 +678,45 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             <span style={{ fontSize: 12, color: "#8a7c5e" }}>
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
-            <button
-              onClick={handleAutoIndent}
-              style={{
-                background: "#efe6d3",
-                border: "1px solid #cabb98",
-                color: "#4a3f2a",
-                borderRadius: 6,
-                padding: "4px 10px",
-                fontSize: 12,
-                cursor: "pointer",
-                fontWeight: 600
-              }}
-            >
-              ✨ จัดย่อหน้าทั้งหมด
-            </button>
+           {/* 🟢 ปุ่มคัดลอกเนื้อหา และ ปุ่มจัดย่อหน้า */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: "#8a7c5e" }}>
+              💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
+            </span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={handleCopyContent}
+                style={{
+                  background: copied ? "#d4edda" : "#efe6d3",
+                  border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"),
+                  color: copied ? "#155724" : "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  transition: "all 0.2s"
+                }}
+              >
+                {copied ? "✓ คัดลอกแล้ว!" : "📋 คัดลอกเนื้อหา"}
+              </button>
+
+              <button
+                onClick={handleAutoIndent}
+                style={{
+                  background: "#efe6d3",
+                  border: "1px solid #cabb98",
+                  color: "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600
+                }}
+              >
+                ✨ จัดย่อหน้าทั้งหมด
+              </button>
+            </div>
           </div>
 
           <textarea
