@@ -500,8 +500,8 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
 const FONT_MIN = 13;
 const FONT_MAX = 28;
 const FONT_SIZE_KEY = "novel-writer-font-size";
-const GEMINI_KEY_STORAGE = "novel-writer-gemini-key";
-const GEMINI_MODEL = "gemini-2.5-flash"; // 🟢 ปรับเป็นชื่อโมเดลที่ Google API รองรับ
+const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys"; // สโตเรจสำหรับเก็บหลายคีย์
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title);
@@ -509,9 +509,10 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [copied, setCopied] = useState(false);
   const [typoNotice, setTypoNotice] = useState("");
   const [isAiProcessing, setIsAiProcessing] = useState(false);
-  
-  // API Key State
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
+  const [progress, setProgress] = useState(0);
+
+  // 🟢 รองรับหลาย API Key (ใส่หลายคีย์แยกด้วยเครื่องหมาย , หรือขึ้นบรรทัดใหม่)
+  const [apiKeysInput, setApiKeysInput] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
   const [showKeyInput, setShowKeyInput] = useState(false);
 
   // ดึงขนาดฟอนต์ล่าสุด
@@ -594,77 +595,129 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // 🤖 ฟังก์ชันส่งเนื้อหาให้ Gemini ตรวจคำพูดและคำผิด
+  // 🟢 แยก Array รายชื่อ API Key ที่ใช้งานได้
+  const getActiveKeyList = () => {
+    const raw = apiKeysInput || localStorage.getItem(GEMINI_KEY_STORAGE) || "";
+    return raw
+      .split(/[\n,]+/)
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
+  };
+
+  // 🤖 ฟังก์ชันส่งตรวจย่อหน้าเดี่ยว
+  const fetchParagraphProofread = async (para, key) => {
+    if (!para.trim()) return para;
+
+    const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทย หน้าที่ของคุณคือ:
+1. เติมเครื่องหมายคำพูด "..." ครอบบทสนทนาหรือคำพูดตัวละครที่ยังไม่มีให้อย่างถูกต้อง
+2. แก้ไขคำพิมพ์ผิด ตัวการันต์ สระเอซ้ำ (เเ -> แ) และเว้นวรรคไม้ยมก (ๆ)
+3. **ห้าม** แก้ไขเนื้อหาหรือสำนวนเด็ดขาด
+4. ตอบกลับเฉพาะข้อความที่แก้ไขแล้วเท่านั้น ห้ามมีคำเกริ่นใดๆ
+
+ข้อความ:
+${para}`;
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }] }]
+        })
+      }
+    );
+
+    const data = await response.json();
+    if (data.error) {
+      throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
+    }
+
+    const aiFixed = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return aiFixed ? aiFixed.trim() : para;
+  };
+
+  // 🟢 🤖 ฟังก์ชันส่งเนื้อหาแบบสลับ Multi-Key สตรีมประมวลผลพร้อมกัน
   const handleGeminiProofread = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนกดตรวจครับ");
       return;
     }
 
-    let currentKey = apiKey.trim();
-    if (!currentKey) {
-      currentKey = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ (ใส่ครั้งเดียว ระบบจะจำไว้ในเครื่องครับ):");
-      if (!currentKey) return;
-      setApiKey(currentKey);
-      localStorage.setItem(GEMINI_KEY_STORAGE, currentKey);
+    let keyList = getActiveKeyList();
+
+    if (keyList.length === 0) {
+      const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ\n(หากมีหลายคีย์ ให้คั่นด้วยเครื่องหมายจุลภาค , หรือขึ้นบรรทัดใหม่):");
+      if (!input) return;
+      setApiKeysInput(input);
+      localStorage.setItem(GEMINI_KEY_STORAGE, input);
+      keyList = input.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length > 0);
     }
 
     setIsAiProcessing(true);
-    setTypoNotice("🤖 Gemini กำลังอ่านและตรวจทานเนื้อหานิยายให้อยู่ครับ...");
+    setProgress(0);
+    setTypoNotice(`🤖 กระจายการตรวจด้วย ${keyList.length} API Key...`);
 
     try {
-      const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทยมืออาชีพ หน้าที่ของคุณคือ:
-1. ตรวจหาบทสนทนาหรือคำพูดตัวละครที่ขาดเครื่องหมายคำพูด "..." แล้วเติมเครื่องหมาย "..." ครอบคำพูดให้อย่างถูกต้องตามบริบท
-2. แก้ไขคำพิมพ์ผิด ตัวการันต์ สระเอซ้ำ (เเ -> แ) และจัดเว้นวรรคไม้ยมก (ๆ) ให้ถูกต้อง
-3. **ห้าม** แก้ไขเนื้อหา สำนวนการเขียน หรือสไตล์ของนักเขียนเด็ดขาด
-4. ตอบกลับเฉพาะเนื้อหานิยายที่ได้รับการแก้ไขแล้วเท่านั้น ห้ามมีคำเกริ่น คำอธิบาย หรือสัญลักษณ์ Markdown อื่นๆ
+      const paragraphs = content.split("\n\n");
+      const total = paragraphs.length;
+      const fixedParagraphs = new Array(total);
+      let completedCount = 0;
 
-เนื้อหานิยายที่ต้องตรวจ:
-${content}`;
+      // ส่งทีละกลุ่มย่อยตามจำนวน Key ที่มี (Parallel Processing)
+      const batchSize = keyList.length;
 
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }]
-          })
+      for (let i = 0; i < total; i += batchSize) {
+        const batchPromises = [];
+
+        for (let j = 0; j < batchSize && (i + j) < total; j++) {
+          const pIndex = i + j;
+          const currentKey = keyList[j % keyList.length];
+
+          const pPromise = fetchParagraphProofread(paragraphs[pIndex], currentKey)
+            .then((res) => {
+              fixedParagraphs[pIndex] = res;
+            })
+            .catch((err) => {
+              console.error(`Index ${pIndex} error:`, err);
+              fixedParagraphs[pIndex] = paragraphs[pIndex]; // Fallback ข้อความเดิมถ้าคีย์ไหนเออเร่อ
+            })
+            .finally(() => {
+              completedCount++;
+              const currentPercent = Math.round((completedCount / total) * 100);
+              setProgress(currentPercent);
+              setTypoNotice(`🤖 ตรวจทานด้วย ${keyList.length} คีย์ขนานกัน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
+            });
+
+          batchPromises.push(pPromise);
         }
-      );
 
-      const data = await response.json();
-
-      if (data.error) {
-        throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
+        await Promise.all(batchPromises);
       }
 
-      const aiFixedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (aiFixedText) {
-        setContent(aiFixedText.trim());
-        setTypoNotice("✨ Gemini ตรวจใส่เครื่องหมายคำพูด \"...\" และแก้คำผิดเรียบร้อยแล้ว!");
-      } else {
-        throw new Error("ไม่ได้รับข้อมูลตอบกลับจาก AI");
-      }
+      setContent(fixedParagraphs.join("\n\n"));
+      setTypoNotice(`✨ ตรวจสอบสลับด้วย ${keyList.length} คีย์เสร็จเรียบร้อยแล้ว!`);
     } catch (err) {
-      alert("เกิดข้อผิดพลาด: " + err.message + "\n(หาก Key ผิด คุณสามารถกดปุ่ม 🔑 เพื่อตั้งค่า Key ใหม่ได้ครับ)");
+      alert("เกิดข้อผิดพลาด: " + err.message + "\n(สามารถกดปุ่ม 🔑 เพื่อเช็ก/เปลี่ยน API Keys ได้ครับ)");
+      setTypoNotice("");
     } finally {
       setIsAiProcessing(false);
       setTimeout(() => setTypoNotice(""), 4000);
     }
   };
 
-  // บันทึก/เปลี่ยน API Key
-  const handleSaveKey = (e) => {
+  // บันทึก/เปลี่ยน API Keys
+  const handleSaveKeys = (e) => {
     e.preventDefault();
-    localStorage.setItem(GEMINI_KEY_STORAGE, apiKey.trim());
+    localStorage.setItem(GEMINI_KEY_STORAGE, apiKeysInput.trim());
     setShowKeyInput(false);
-    alert("บันทึก Gemini API Key เรียบร้อยแล้ว!");
+    const count = getActiveKeyList().length;
+    alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
   const charCountTotal = content ? content.length : 0;
   const charCountNoSpaces = content ? content.replace(/\s+/g, "").length : 0;
+  const keyCount = getActiveKeyList().length;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#f4ede0", zIndex: 50, display: "flex", flexDirection: "column" }}>
@@ -686,10 +739,10 @@ ${content}`;
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
             onClick={() => setShowKeyInput(!showKeyInput)}
-            title="ตั้งค่า Gemini API Key"
+            title="ตั้งค่า Gemini API Keys"
             style={{ background: "none", border: "1px solid #3a4454", color: "#c9a15a", cursor: "pointer", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}
           >
-            🔑 API Key
+            🔑 {keyCount > 0 ? `${keyCount} API Keys` : "API Key"}
           </button>
           {onDelete && (
             <button onClick={onDelete} style={{ background: "none", border: "none", color: "#a85a5a", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
@@ -705,19 +758,25 @@ ${content}`;
         </div>
       </div>
 
-      {/* Popover สำหรับใส่ API Key */}
+      {/* 🟢 Popover สำหรับใส่หลาย API Keys */}
       {showKeyInput && (
-        <form onSubmit={handleSaveKey} style={{ background: "#2a3140", padding: "10px 16px", display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            type="password"
-            placeholder="วาง Gemini API Key ที่นี่..."
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            style={{ flex: 1, padding: "6px 10px", borderRadius: 4, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12 }}
+        <form onSubmit={handleSaveKeys} style={{ background: "#2a3140", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <label style={{ fontSize: 12, color: "#c9a15a" }}>
+            🔑 วาง Gemini API Keys หลายๆ คีย์ได้ที่นี่ (แยกแต่ละคีย์ด้วยบรรทัดใหม่ หรือเครื่องหมาย , )
+          </label>
+          <textarea
+            rows={3}
+            placeholder={`AIzaSyA1...\nAIzaSyB2...\nAIzaSyC3...`}
+            value={apiKeysInput}
+            onChange={(e) => setApiKeysInput(e.target.value)}
+            style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12, fontFamily: "monospace" }}
           />
-          <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
-            บันทึก Key
-          </button>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "#9099a8" }}>ตรวจพบทั้งหมด {keyCount} คีย์</span>
+            <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
+              บันทึกคีย์ทั้งหมด
+            </button>
+          </div>
         </form>
       )}
 
@@ -795,7 +854,7 @@ ${content}`;
                   fontWeight: 600
                 }}
               >
-                {isAiProcessing ? "⏳ AI กำลังตรวจ..." : "🤖 AI ตรวจคำพูด & คำผิด"}
+                {isAiProcessing ? `⏳ (${progress}%)` : `🤖 AI ตรวจสลับคีย์ (${keyCount})`}
               </button>
 
               <button
@@ -833,8 +892,28 @@ ${content}`;
             </div>
           </div>
 
-          {/* ข้อความแจ้งเตือน */}
-          {typoNotice && (
+          {/* แถบ Progress Bar สวยงามบอกเปอร์เซ็นต์ความคืบหน้า */}
+          {isAiProcessing && (
+            <div style={{ marginBottom: 12, background: "#efe6d3", borderRadius: 8, padding: 8, border: "1px solid #ddd0b3" }}>
+              <div style={{ fontSize: 12, color: "#4a3f2a", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+                <span>{typoNotice}</span>
+                <span style={{ fontWeight: 700 }}>{progress}%</span>
+              </div>
+              <div style={{ width: "100%", height: 8, background: "#d0c3a5", borderRadius: 4, overflow: "hidden" }}>
+                <div
+                  style={{
+                    width: `${progress}%`,
+                    height: "100%",
+                    background: "#c9a15a",
+                    transition: "width 0.3s ease"
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ข้อความแจ้งเตือนเมื่อตรวจเสร็จ */}
+          {!isAiProcessing && typoNotice && (
             <div style={{ background: "#e2f0d9", border: "1px solid #b2d8a0", color: "#2e5b1e", padding: "8px 12px", borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
               {typoNotice}
             </div>
