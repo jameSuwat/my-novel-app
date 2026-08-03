@@ -515,11 +515,16 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   }, [chapter.id, chapter.order]);
 
   useEffect(() => {
-    if (contentRef.current) {
-      contentRef.current.style.height = "auto";
-      contentRef.current.style.height = contentRef.current.scrollHeight + "px";
-    }
-  }, [content, fontSize]);
+  if (contentRef.current) {
+    const scrollContainer = contentRef.current.parentElement.parentElement;
+    const currentScroll = scrollContainer.scrollTop;
+
+    contentRef.current.style.height = "auto";
+    contentRef.current.style.height = contentRef.current.scrollHeight + "px";
+
+    scrollContainer.scrollTop = currentScroll;
+  }
+}, [content, fontSize]);
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#f4ede0", zIndex: 50, display: "flex", flexDirection: "column" }}>
