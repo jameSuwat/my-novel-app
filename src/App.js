@@ -500,7 +500,7 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
 const FONT_MIN = 13;
 const FONT_MAX = 28;
 const FONT_SIZE_KEY = "novel-writer-font-size";
-const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys"; // สโตเรจสำหรับเก็บหลายคีย์
+const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys";
 const GEMINI_MODEL = "gemini-2.5-flash";
 
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
@@ -511,7 +511,13 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  // 🟢 รองรับหลาย API Key (ใส่หลายคีย์แยกด้วยเครื่องหมาย , หรือขึ้นบรรทัดใหม่)
+  // 🟢 สเตตสำหรับระบบจัดการสรรพนาม (Popup Modal)
+  const [showPronounModal, setShowPronounModal] = useState(false);
+  const [detectedPronouns, setDetectedPronouns] = useState([]); // รายการที่ AI สแกนพบ
+  const [selectedPronoun, setSelectedPronoun] = useState(""); // คำที่เลือกจะเปลี่ยน
+  const [replacementWord, setReplacementWord] = useState(""); // คำใหม่ที่จะใช้แทน
+
+  // API Keys Input
   const [apiKeysInput, setApiKeysInput] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
   const [showKeyInput, setShowKeyInput] = useState(false);
 
@@ -595,7 +601,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // 🟢 แยก Array รายชื่อ API Key ที่ใช้งานได้
   const getActiveKeyList = () => {
     const raw = apiKeysInput || localStorage.getItem(GEMINI_KEY_STORAGE) || "";
     return raw
@@ -604,7 +609,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       .filter((k) => k.length > 0);
   };
 
-  // 🤖 ฟังก์ชันส่งตรวจย่อหน้าเดี่ยว
+  // ฟังก์ชันส่งตรวจย่อหน้าเดี่ยว (สำหรับปุ่ม AI ตรวจคำผิดปกติเดิม)
   const fetchParagraphProofread = async (para, key) => {
     if (!para.trim()) return para;
 
@@ -637,7 +642,7 @@ ${para}`;
     return aiFixed ? aiFixed.trim() : para;
   };
 
-  // 🟢 🤖 ฟังก์ชันส่งเนื้อหาแบบสลับ Multi-Key สตรีมประมวลผลพร้อมกัน
+  // AI ตรวจคำพูด & คำผิดแบบกระจาย Multi-Key
   const handleGeminiProofread = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนกดตรวจครับ");
@@ -645,7 +650,6 @@ ${para}`;
     }
 
     let keyList = getActiveKeyList();
-
     if (keyList.length === 0) {
       const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ\n(หากมีหลายคีย์ ให้คั่นด้วยเครื่องหมายจุลภาค , หรือขึ้นบรรทัดใหม่):");
       if (!input) return;
@@ -663,13 +667,10 @@ ${para}`;
       const total = paragraphs.length;
       const fixedParagraphs = new Array(total);
       let completedCount = 0;
-
-      // ส่งทีละกลุ่มย่อยตามจำนวน Key ที่มี (Parallel Processing)
       const batchSize = keyList.length;
 
       for (let i = 0; i < total; i += batchSize) {
         const batchPromises = [];
-
         for (let j = 0; j < batchSize && (i + j) < total; j++) {
           const pIndex = i + j;
           const currentKey = keyList[j % keyList.length];
@@ -678,27 +679,25 @@ ${para}`;
             .then((res) => {
               fixedParagraphs[pIndex] = res;
             })
-            .catch((err) => {
-              console.error(`Index ${pIndex} error:`, err);
-              fixedParagraphs[pIndex] = paragraphs[pIndex]; // Fallback ข้อความเดิมถ้าคีย์ไหนเออเร่อ
+            .catch(() => {
+              fixedParagraphs[pIndex] = paragraphs[pIndex];
             })
             .finally(() => {
               completedCount++;
               const currentPercent = Math.round((completedCount / total) * 100);
               setProgress(currentPercent);
-              setTypoNotice(`🤖 ตรวจทานด้วย ${keyList.length} คีย์ขนานกัน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
+              setTypoNotice(`🤖 ตรวจทานขนาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
             });
 
           batchPromises.push(pPromise);
         }
-
         await Promise.all(batchPromises);
       }
 
       setContent(fixedParagraphs.join("\n\n"));
       setTypoNotice(`✨ ตรวจสอบสลับด้วย ${keyList.length} คีย์เสร็จเรียบร้อยแล้ว!`);
     } catch (err) {
-      alert("เกิดข้อผิดพลาด: " + err.message + "\n(สามารถกดปุ่ม 🔑 เพื่อเช็ก/เปลี่ยน API Keys ได้ครับ)");
+      alert("เกิดข้อผิดพลาด: " + err.message);
       setTypoNotice("");
     } finally {
       setIsAiProcessing(false);
@@ -706,7 +705,117 @@ ${para}`;
     }
   };
 
-  // บันทึก/เปลี่ยน API Keys
+  // 🟢 1. สแกนหาสรรพนามในเนื้อหาผ่าน AI
+  const handleScanPronouns = async () => {
+    if (!content.trim()) {
+      alert("กรุณาใส่เนื้อหานิยายก่อนสแกนสรรพนามครับ");
+      return;
+    }
+
+    let keyList = getActiveKeyList();
+    if (keyList.length === 0) {
+      const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณก่อนครับ:");
+      if (!input) return;
+      setApiKeysInput(input);
+      localStorage.setItem(GEMINI_KEY_STORAGE, input);
+      keyList = [input.trim()];
+    }
+
+    setIsAiProcessing(true);
+    setTypoNotice("👥 AI กำลังสแกนหาสรรพนามในเนื้อหา...");
+
+    try {
+      const promptText = `วิเคราะห์เนื้อหานิยายนี้ แล้วดึงรายการ "คำสรรพนาม" ทั้งหมดที่ใช้แทนตัวบุคคล (เช่น ฉัน, เธอ, คุณ, เขา, แก, ผม, เรา, ข้า, เจ้า, นาย, ฯลฯ) ที่ปรากฏในเรื่อง
+ให้ตอบกลับมาเป็นรายการคำสรรพนามเหล่านั้น **ในรูปแบบ JSON Array ของสตริงธรรมดาเท่านั้น** ห้ามมีคำอธิบายอื่น เช่น ["ฉัน", "เธอ", "คุณ", "เขา"]
+
+เนื้อหานิยาย:
+${content}`;
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${keyList[0]}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }]
+          })
+        }
+      );
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+
+      let rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+      // ทำความสะอาดข้อความเพื่อดึงเฉพาะ Array
+      rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+      const pronounsArray = JSON.parse(rawText);
+
+      if (pronounsArray && pronounsArray.length > 0) {
+        setDetectedPronouns(pronounsArray);
+        setSelectedPronoun(pronounsArray[0]);
+        setReplacementWord(pronounsArray[0]);
+        setShowPronounModal(true);
+        setTypoNotice("✨ สแกนหาสรรพนามสำเร็จ!");
+      } else {
+        alert("ไม่พบคำสรรพนามที่เด่นชัดในตอนนี้ครับ");
+      }
+    } catch (err) {
+      alert("เกิดข้อผิดพลาดในการสแกน: " + err.message);
+    } finally {
+      setIsAiProcessing(false);
+      setTimeout(() => setTypoNotice(""), 3000);
+    }
+  };
+
+  // 🟢 2. ยืนยันการเปลี่ยนสรรพนามทั้งตอนผ่าน AI
+  const handleApplyPronounReplacement = async () => {
+    if (!selectedPronoun || !replacementWord) {
+      alert("กรุณาระบุคำเดิมและคำใหม่ที่จะเปลี่ยนครับ");
+      return;
+    }
+
+    let keyList = getActiveKeyList();
+    setIsAiProcessing(true);
+    setShowPronounModal(false);
+    setTypoNotice(`👥 กำลังเปลี่ยนคำว่า "${selectedPronoun}" เป็น "${replacementWord}" ทั้งตอน...`);
+
+    try {
+      const promptText = `คุณคือบรรณาธิการนิยาย หน้าที่ของคุณคือ:
+แปลงคำสรรพนามคำว่า "${selectedPronoun}" ทั้งหมดในเนื้อหานิยายด้านล่างนี้ ให้เปลี่ยนเป็นคำว่า "${replacementWord}" โดยให้ปรับแต่งคำเชื่อม คำลงท้าย หรือบริบทโดยรอบให้สอดคล้องลื่นไหลตามหลักไวยากรณ์ภาษาไทย **ห้ามเปลี่ยนเนื้อหาหรือพล็อตอื่นเด็ดขาด**
+ตอบกลับเฉพาะเนื้อหานิยายที่แก้ไขแล้วเท่านั้น ห้ามมีคำเกริ่นใดๆ
+
+เนื้อหานิยาย:
+${content}`;
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${keyList[0]}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }]
+          })
+        }
+      );
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const updatedContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (updatedContent) {
+        setContent(updatedContent.trim());
+        setTypoNotice(`✨ เปลี่ยนสรรพนามจาก "${selectedPronoun}" เป็น "${replacementWord}" สำเร็จเรียบร้อย!`);
+      } else {
+        throw new Error("ไม่ได้รับข้อมูลตอบกลับจาก AI");
+      }
+    } catch (err) {
+      alert("เกิดข้อผิดพลาด: " + err.message);
+    } finally {
+      setIsAiProcessing(false);
+      setTimeout(() => setTypoNotice(""), 4000);
+    }
+  };
+
   const handleSaveKeys = (e) => {
     e.preventDefault();
     localStorage.setItem(GEMINI_KEY_STORAGE, apiKeysInput.trim());
@@ -758,7 +867,7 @@ ${para}`;
         </div>
       </div>
 
-      {/* 🟢 Popover สำหรับใส่หลาย API Keys */}
+      {/* Popover สำหรับใส่หลาย API Keys */}
       {showKeyInput && (
         <form onSubmit={handleSaveKeys} style={{ background: "#2a3140", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
           <label style={{ fontSize: 12, color: "#c9a15a" }}>
@@ -815,7 +924,62 @@ ${para}`;
       </div>
 
       {/* Writing area */}
-      <div style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
+      <div style={{ flex: 1, overflowY: "auto", color: "#2a2318", position: "relative" }}>
+        
+        {/* 🟢 Popup Modal สำหรับเปลี่ยนสรรพนาม */}
+        {showPronounModal && (
+          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: "100%", maxWidth: 420, boxShadow: "0 10px 25px rgba(0,0,0,0.2)" }}>
+              <h3 style={{ margin: "0 0 12px 0", color: "#1a202a", fontSize: 18 }}>👥 จัดการและเปลี่ยนสรรพนาม</h3>
+              <p style={{ fontSize: 13, color: "#666", marginBottom: 16 }}>
+                เลือกคำสรรพนามที่ AI สแกนพบในตอนนี้ แล้วพิมพ์คำใหม่ที่ต้องการเปลี่ยนแทนที่:
+              </p>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#444", marginBottom: 6 }}>1. เลือกคำสรรพนามเดิมที่ต้องการเปลี่ยน:</label>
+                <select
+                  value={selectedPronoun}
+                  onChange={(e) => {
+                    setSelectedPronoun(e.target.value);
+                    setReplacementWord(e.target.value);
+                  }}
+                  style={{ width: "100%", padding: "10px", borderRadius: 6, border: "1px solid #ccc", fontSize: 14, background: "#f9f9f9" }}
+                >
+                  {detectedPronouns.map((p, idx) => (
+                    <option key={idx} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#444", marginBottom: 6 }}>2. พิมพ์คำสรรพนามใหม่ที่ต้องการใช้แทน:</label>
+                <input
+                  type="text"
+                  value={replacementWord}
+                  onChange={(e) => setReplacementWord(e.target.value)}
+                  placeholder="เช่น ข้า, เจ้า, ใต้บาท, องค์ชาย..."
+                  style={{ width: "100%", padding: "10px", borderRadius: 6, border: "1px solid #ccc", fontSize: 14 }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setShowPronounModal(false)}
+                  style={{ background: "#e0e0e0", border: "none", padding: "8px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, color: "#333" }}
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  onClick={handleApplyPronounReplacement}
+                  style={{ background: "#c9a15a", border: "none", padding: "8px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, color: "#1a140a" }}
+                >
+                  ✨ ยืนยันเปลี่ยนทั้งตอน
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ padding: "20px 18px 60px" }}>
           <input
             value={title}
@@ -840,6 +1004,25 @@ ${para}`;
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              
+              {/* 🟢 ปุ่มสแกนสรรพนามใหม่ */}
+              <button
+                onClick={handleScanPronouns}
+                disabled={isAiProcessing}
+                style={{
+                  background: isAiProcessing ? "#d0c3a5" : "#3b4a6b",
+                  border: "1px solid #526694",
+                  color: "#fff",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: isAiProcessing ? "wait" : "pointer",
+                  fontWeight: 600
+                }}
+              >
+                {isAiProcessing ? "⏳ กำลังสแกน..." : "👥 เช็กสรรพนาม"}
+              </button>
+
               <button
                 onClick={handleGeminiProofread}
                 disabled={isAiProcessing}
@@ -892,7 +1075,7 @@ ${para}`;
             </div>
           </div>
 
-          {/* แถบ Progress Bar สวยงามบอกเปอร์เซ็นต์ความคืบหน้า */}
+          {/* แถบ Progress Bar */}
           {isAiProcessing && (
             <div style={{ marginBottom: 12, background: "#efe6d3", borderRadius: 8, padding: 8, border: "1px solid #ddd0b3" }}>
               <div style={{ fontSize: 12, color: "#4a3f2a", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
@@ -912,7 +1095,6 @@ ${para}`;
             </div>
           )}
 
-          {/* ข้อความแจ้งเตือนเมื่อตรวจเสร็จ */}
           {!isAiProcessing && typoNotice && (
             <div style={{ background: "#e2f0d9", border: "1px solid #b2d8a0", color: "#2e5b1e", padding: "8px 12px", borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
               {typoNotice}
