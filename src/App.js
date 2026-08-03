@@ -504,16 +504,9 @@ const FONT_SIZE_KEY = "novel-writer-font-size";
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title);
   const [content, setContent] = useState(chapter.content);
-  // 🟢 เพิ่ม State และฟังก์ชันคัดลอกเนื้อหา
   const [copied, setCopied] = useState(false);
 
-  const handleCopyContent = () => {
-    if (!content) return;
-    navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000); // คืนค่าปุ่มเดิมหลังผ่านไป 2 วินาที
-  };
-  // 🟢 ดึงค่าขนาดฟอนต์ล่าสุดที่เคยเซฟไว้ หากไม่มีจะใช้ค่า 17
+  // ดึงขนาดฟอนต์ล่าสุดที่เคยเซฟไว้
   const [fontSize, setFontSize] = useState(() => {
     try {
       const saved = localStorage.getItem(FONT_SIZE_KEY);
@@ -524,21 +517,19 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   });
   const contentRef = useRef(null);
 
-  // 🟢 บันทึกขนาดฟอนต์ลงเครื่องทุกครั้งที่มีการปรับขนาด
+  // เซฟขนาดฟอนต์ลงเครื่อง
   useEffect(() => {
     try {
       localStorage.setItem(FONT_SIZE_KEY, fontSize);
     } catch (e) {}
   }, [fontSize]);
 
-  // Defensive reset: whenever we're handed a different chapter (new id, or a
-  // fresh "new chapter" draft with a different order), clear the fields.
-  // This covers the case even if the component instance isn't remounted.
   useEffect(() => {
     setTitle(chapter.title || "");
     setContent(chapter.content || "");
   }, [chapter.id, chapter.order]);
-// 🟢 ฟังก์ชันจัดย่อหน้าอัตโนมัติสำหรับเนื้อหาทั้งหมด
+
+  // ฟังก์ชันจัดย่อหน้าอัตโนมัติ
   const handleAutoIndent = () => {
     if (!content) return;
     const formatted = content
@@ -546,19 +537,19 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       .map((line) => {
         const trimmed = line.trim();
         if (!trimmed) return "";
-        return "    " + trimmed; // เพิ่มย่อหน้า 4 ช่อง
+        return "    " + trimmed;
       })
       .filter((line, index, arr) => line !== "" || (index > 0 && arr[index - 1] !== ""))
-      .join("\n\n"); // เว้นบรรทัดระหว่างย่อหน้าให้อ่านง่าย
+      .join("\n\n");
     setContent(formatted);
   };
 
-  // 🟢 ฟังก์ชันเมื่อกด Enter ให้ขึ้นบรรทัดใหม่พร้อมย่อหน้าทันที
+  // ฟังก์ชันกด Enter แล้วขึ้นย่อหน้าใหม่ทันที
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
       const { selectionStart, selectionEnd } = e.target;
-      const indent = "\n\n    "; // ขึ้นย่อหน้าใหม่ + เว้นระยะห่าง
+      const indent = "\n\n    ";
       const newContent =
         content.substring(0, selectionStart) +
         indent +
@@ -574,17 +565,27 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       }, 0);
     }
   };
+
+  // แก้อาการหน้าจอเด้งขึ้นบน
   useEffect(() => {
-  if (contentRef.current) {
-    const scrollContainer = contentRef.current.parentElement.parentElement;
-    const currentScroll = scrollContainer.scrollTop;
+    if (contentRef.current) {
+      const scrollContainer = contentRef.current.parentElement.parentElement;
+      const currentScroll = scrollContainer.scrollTop;
 
-    contentRef.current.style.height = "auto";
-    contentRef.current.style.height = contentRef.current.scrollHeight + "px";
+      contentRef.current.style.height = "auto";
+      contentRef.current.style.height = contentRef.current.scrollHeight + "px";
 
-    scrollContainer.scrollTop = currentScroll;
-  }
-}, [content, fontSize]);
+      scrollContainer.scrollTop = currentScroll;
+    }
+  }, [content, fontSize]);
+
+  // ฟังก์ชันคัดลอกเนื้อหาทั้งหมด
+  const handleCopyContent = () => {
+    if (!content) return;
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#f4ede0", zIndex: 50, display: "flex", flexDirection: "column" }}>
@@ -673,12 +674,8 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
               color: "#221d14",
             }}
           />
-         {/* 🟢 ปุ่มกดจัดย่อหน้าอัตโนมัติ */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontSize: 12, color: "#8a7c5e" }}>
-              💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
-            </span>
-           {/* 🟢 ปุ่มคัดลอกเนื้อหา และ ปุ่มจัดย่อหน้า */}
+
+          {/* 🟢 ปุ่มคัดลอกเนื้อหา และ ปุ่มจัดย่อหน้า */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <span style={{ fontSize: 12, color: "#8a7c5e" }}>
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
@@ -732,7 +729,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
               background: "transparent",
               resize: "none",
               fontSize: fontSize,
-              lineHeight: 2.1,
+              lineHeight: 1.75,
               letterSpacing: "0.2px",
               color: "#2a2318",
               minHeight: "60vh",
