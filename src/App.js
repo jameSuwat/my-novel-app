@@ -588,7 +588,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // 🟢 ฟังก์ชันตรวจคำผิดและแก้ฟอร์แมตภาษาไทยอัตโนมัติ
+  // ฟังก์ชันตรวจคำผิดและแก้ฟอร์แมตภาษาไทยอัตโนมัติ
   const handleCheckAndFixTypos = () => {
     if (!content) return;
     let fixed = content;
@@ -623,6 +623,68 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       setTypoNotice("✓ ไม่พบคำพิมพ์ผิดยอดฮิต (สระเอซ้ำ/ไม้ยมกติด/เว้นวรรคเกิน)");
     }
     setTimeout(() => setTypoNotice(""), 3500);
+  };
+
+  // 🟢 💬 ฟังก์ชันตรวจและใส่เครื่องหมายคำพูด "..." อัตโนมัติ
+  const handleFixDialogueQuotes = () => {
+    if (!content) return;
+
+    // กรณีไฮไลต์คลุมดำข้อความ: ใส่/ถอดเครื่องหมาย "..." ครอบข้อความทันที
+    if (contentRef.current) {
+      const { selectionStart, selectionEnd } = contentRef.current;
+      if (selectionStart !== selectionEnd) {
+        const selectedText = content.substring(selectionStart, selectionEnd);
+        const wrapped = (selectedText.startsWith('"') && selectedText.endsWith('"'))
+          ? selectedText.slice(1, -1)
+          : `"${selectedText}"`;
+        const newContent = content.substring(0, selectionStart) + wrapped + content.substring(selectionEnd);
+        setContent(newContent);
+        setTypoNotice('✨ ใส่เครื่องหมาย "..." ครอบข้อความที่เลือกเรียบร้อย!');
+        setTimeout(() => setTypoNotice(""), 3000);
+        return;
+      }
+    }
+
+    let fixed = content;
+    let fixesCount = 0;
+
+    // 1. แปลงอัญประกาศแบบอื่นๆ (“ ” 「 」) ให้เป็น " " เพื่อความเป็นระเบียบมาตรฐาน
+    const quoteStandardized = fixed.replace(/[“”「」]/g, '"').replace(/[‘’]/g, "'");
+    if (quoteStandardized !== fixed) {
+      fixesCount++;
+      fixed = quoteStandardized;
+    }
+
+    // 2. ตรวจหาคำกริยานำคำพูดที่ยังไม่มี " " ตามหลัง เช่น พูดว่า..., ตอบว่า..., ถามว่า...
+    const dialogueVerbRegex = /(พูดว่า|ถามว่า|ตอบว่า|บอกว่า|ตะโกนว่า|กระซิบว่า|อุทานว่า|พึมพำว่า|กระเซ้าว่า|แย้งว่า)\s*([^"\n\r]+)/g;
+    const newFixed = fixed.replace(dialogueVerbRegex, (match, verb, speech) => {
+      const trimmedSpeech = speech.trim();
+      if (!trimmedSpeech || trimmedSpeech.startsWith('"')) return match;
+      fixesCount++;
+      return `${verb} "${trimmedSpeech}"`;
+    });
+    fixed = newFixed;
+
+    // 3. ตรวจหาบรรทัดที่มี " เปิดค้างไว้แต่ลืมปิดท้ายบรรทัด
+    const lines = fixed.split("\n");
+    const fixedLines = lines.map(line => {
+      const quoteCount = (line.match(/"/g) || []).length;
+      if (quoteCount % 2 !== 0) {
+        fixesCount++;
+        return line.trimEnd() + '"';
+      }
+      return line;
+    });
+    fixed = fixedLines.join("\n");
+
+    setContent(fixed);
+
+    if (fixesCount > 0) {
+      setTypoNotice(`✨ เติม/จัดระเบียบเครื่องหมายคำพูด "..." ให้แล้ว ${fixesCount} จุด!`);
+    } else {
+      setTypoNotice('✓ ไม่พบคำพูดที่ขาดเครื่องหมาย (หรือลองคลุมดำข้อความแล้วกดปุ่มนี้เพื่อใส่ "..." ได้ครับ)');
+    }
+    setTimeout(() => setTypoNotice(""), 4000);
   };
 
   // คำนวณจำนวนตัวอักษร
@@ -724,6 +786,22 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             </span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button
+                onClick={handleFixDialogueQuotes}
+                style={{
+                  background: "#efe6d3",
+                  border: "1px solid #cabb98",
+                  color: "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600
+                }}
+              >
+                💬 ตรวจ/ใส่ "..."
+              </button>
+
+              <button
                 onClick={handleCheckAndFixTypos}
                 style={{
                   background: "#efe6d3",
@@ -774,7 +852,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             </div>
           </div>
 
-          {/* แสดงข้อความแจ้งเตือนผลการตรวจคำผิด */}
+          {/* แสดงข้อความแจ้งเตือนผลการตรวจ */}
           {typoNotice && (
             <div style={{ background: "#e2f0d9", border: "1px solid #b2d8a0", color: "#2e5b1e", padding: "6px 12px", borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
               {typoNotice}
@@ -803,7 +881,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             }}
           />
 
-          {/* 🟢 โซนสรุปจำนวนคำและตัวอักษรแบบละเอียด */}
+          {/* สรุปจำนวนคำและตัวอักษร */}
           <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
             <span>📝 {wordCount(content)} คำ</span>
             <span>•</span>
