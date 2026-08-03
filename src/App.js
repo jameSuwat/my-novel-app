@@ -505,6 +505,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title);
   const [content, setContent] = useState(chapter.content);
   const [copied, setCopied] = useState(false);
+  const [typoNotice, setTypoNotice] = useState("");
 
   // ดึงขนาดฟอนต์ล่าสุดที่เคยเซฟไว้
   const [fontSize, setFontSize] = useState(() => {
@@ -586,6 +587,47 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  // 🟢 ฟังก์ชันตรวจคำผิดและแก้ฟอร์แมตภาษาไทยอัตโนมัติ
+  const handleCheckAndFixTypos = () => {
+    if (!content) return;
+    let fixed = content;
+    let fixesCount = 0;
+
+    // 1. แก้ 'เเ' (สระเอซ้ำสองตัว) ให้เป็น 'แ' (สระแอ)
+    const doubleECount = (fixed.match(/เเ/g) || []).length;
+    if (doubleECount > 0) {
+      fixesCount += doubleECount;
+      fixed = fixed.replace(/เเ/g, "แ");
+    }
+
+    // 2. เคลียร์ช่องว่างซ้ำซ้อน (Spacebar เกิน 2 ช่องติดกันที่ไม่ใช่ย่อหน้า)
+    const spaceFixed = fixed.replace(/([^ \n])  +([^ \n])/g, "$1 $2");
+    if (spaceFixed !== fixed) {
+      fixesCount += 1;
+      fixed = spaceFixed;
+    }
+
+    // 3. จัดเว้นวรรคไม้ยมก (ๆ) ให้ถูกต้องตามหลักภาษาไทย
+    const yamokFixed = fixed.replace(/([^ \n])ๆ/g, "$1 ๆ").replace(/ๆ([^ \n])/g, "ๆ $1");
+    if (yamokFixed !== fixed) {
+      fixesCount += 1;
+      fixed = yamokFixed;
+    }
+
+    setContent(fixed);
+
+    if (fixesCount > 0) {
+      setTypoNotice(`✨ แก้ไขจุดพิมพ์ผิด/เว้นวรรคให้แล้ว ${fixesCount} จุด!`);
+    } else {
+      setTypoNotice("✓ ไม่พบคำพิมพ์ผิดยอดฮิต (สระเอซ้ำ/ไม้ยมกติด/เว้นวรรคเกิน)");
+    }
+    setTimeout(() => setTypoNotice(""), 3500);
+  };
+
+  // คำนวณจำนวนตัวอักษร
+  const charCountTotal = content ? content.length : 0;
+  const charCountNoSpaces = content ? content.replace(/\s+/g, "").length : 0;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#f4ede0", zIndex: 50, display: "flex", flexDirection: "column" }}>
@@ -675,12 +717,28 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             }}
           />
 
-          {/* 🟢 ปุ่มคัดลอกเนื้อหา และ ปุ่มจัดย่อหน้า */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          {/* 🟢 โซนปุ่มเครื่องมือช่วยเขียน */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
             <span style={{ fontSize: 12, color: "#8a7c5e" }}>
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button
+                onClick={handleCheckAndFixTypos}
+                style={{
+                  background: "#efe6d3",
+                  border: "1px solid #cabb98",
+                  color: "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600
+                }}
+              >
+                🔍 ตรวจแก้คำผิด
+              </button>
+
               <button
                 onClick={handleCopyContent}
                 style={{
@@ -716,12 +774,21 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
             </div>
           </div>
 
+          {/* แสดงข้อความแจ้งเตือนผลการตรวจคำผิด */}
+          {typoNotice && (
+            <div style={{ background: "#e2f0d9", border: "1px solid #b2d8a0", color: "#2e5b1e", padding: "6px 12px", borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
+              {typoNotice}
+            </div>
+          )}
+
           <textarea
             ref={contentRef}
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="เริ่มเขียนตอนนี้..."
+            spellCheck={true}
+            lang="th"
             style={{
               width: "100%",
               border: "none",
@@ -735,8 +802,14 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
               minHeight: "60vh",
             }}
           />
-          <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8 }}>
-            {wordCount(content)} คำ
+
+          {/* 🟢 โซนสรุปจำนวนคำและตัวอักษรแบบละเอียด */}
+          <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <span>📝 {wordCount(content)} คำ</span>
+            <span>•</span>
+            <span>🔤 {charCountTotal} ตัวอักษร</span>
+            <span>•</span>
+            <span>(ไม่รวมเว้นวรรค: {charCountNoSpaces})</span>
           </div>
 
           <button
