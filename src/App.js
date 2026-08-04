@@ -1,5 +1,20 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { ChevronLeft, ChevronRight, ArrowRight, Plus, Pencil, Image as ImageIcon, X, Trash2, Clock, BookOpen, Search, Feather } from "lucide-react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc } from "firebase/firestore";
+
+// 🟢 1. ตั้งค่าเชื่อมต่อ Google Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyCyZuVUuCeZ-5Fajn4P0WTWdCI2ceHG4pI",
+  authDomain: "my-novel-notebook.firebaseapp.com",
+  projectId: "my-novel-notebook",
+  storageBucket: "my-novel-notebook.firebasestorage.app",
+  messagingSenderId: "245609229910",
+  appId: "1:245609229910:web:39871f779e1b9a56b215f7"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
 function timeAgo(ts) {
   const diff = Date.now() - ts;
@@ -47,21 +62,9 @@ const seedNovels = [
 
 const STORAGE_KEY = "novel-writer-app-data";
 
-function loadNovels() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return seedNovels;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    return seedNovels;
-  } catch (e) {
-    console.error("โหลดข้อมูลจาก localStorage ไม่สำเร็จ", e);
-    return seedNovels;
-  }
-}
-
 export default function NovelLibraryApp() {
-  const [novels, setNovels] = useState(loadNovels);
+  const [novels, setNovels] = useState([]);
+  const [isLoaded, setIsLoaded] = useState(false); // เช็กว่าดึงข้อมูลจาก Cloud เสร็จหรือยัง
   const [currentId, setCurrentId] = useState(null);
   const [query, setQuery] = useState("");
   const [editingNovelInfo, setEditingNovelInfo] = useState(null); 
@@ -69,18 +72,50 @@ export default function NovelLibraryApp() {
   const [isNewChapter, setIsNewChapter] = useState(false);
   const fileInputRef = useRef(null);
 
+  // 🟢 2. โหลดข้อมูลจาก Firebase เมื่อเปิดแอป
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(novels));
-    } catch (e) {
-      console.error("บันทึกข้อมูลลง localStorage ไม่สำเร็จ", e);
+    async function fetchFromFirebase() {
+      try {
+        const querySnapshot = await getDocs(collection(db, "novels"));
+        const fetched = querySnapshot.docs.map(doc => doc.data());
+        
+        if (fetched.length > 0) {
+          setNovels(fetched);
+        } else {
+          // ถ้าเปิดครั้งแรกและยังไม่มีข้อมูล ให้ใช้ seedNovels แล้วเซฟขึ้น Cloud
+          setNovels(seedNovels);
+          for (const n of seedNovels) {
+            await setDoc(doc(db, "novels", n.id), n);
+          }
+        }
+      } catch (e) {
+        console.error("โหลดข้อมูลจาก Firebase ล้มเหลว", e);
+        // Fallback: ดึงจากเครื่องหากเน็ตมีปัญหา
+        const local = localStorage.getItem(STORAGE_KEY);
+        if (local) setNovels(JSON.parse(local));
+        else setNovels(seedNovels);
+      } finally {
+        setIsLoaded(true);
+      }
     }
-  }, [novels]);
+    fetchFromFirebase();
+  }, []);
 
-  // 🟢 ฟังก์ชันบังคับเซฟลงเครื่องทันที (Manual Save)
-  const forceSaveToLocal = () => {
+  // 🟢 3. แบ็กอัปข้อมูลลงเครื่องด้วยเสมอ
+  useEffect(() => {
+    if (isLoaded) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(novels));
+      } catch (e) {}
+    }
+  }, [novels, isLoaded]);
+
+  // ฟังก์ชันบังคับเซฟลง Cloud 
+  const forceSaveToCloud = async () => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(novels));
+      for (const n of novels) {
+        await setDoc(doc(db, "novels", n.id), n);
+      }
     } catch (e) {
       console.error("บังคับบันทึกข้อมูลล้มเหลว", e);
     }
@@ -95,15 +130,25 @@ export default function NovelLibraryApp() {
       .sort((a, b) => novelUpdatedAt(b) - novelUpdatedAt(a));
   }, [novels, query]);
 
+  // 🟢 4. อัปเดตนิยายและซิงค์ขึ้น Firebase ทันที
   function updateNovel(id, patch) {
-    setNovels((prev) => prev.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+    setNovels((prev) => {
+      const nextNovels = prev.map((n) => (n.id === id ? { ...n, ...patch } : n));
+      const targetNovel = nextNovels.find(n => n.id === id);
+      if (targetNovel) {
+        setDoc(doc(db, "novels", id), targetNovel).catch(console.error);
+      }
+      return nextNovels;
+    });
   }
 
   function saveNovelInfo(data) {
     if (editingNovelInfo === "new") {
       const id = `n-${Date.now()}`;
-      setNovels((prev) => [...prev, { id, chapters: [], createdAt: Date.now(), ...data }]);
+      const newNovel = { id, chapters: [], createdAt: Date.now(), ...data };
+      setNovels((prev) => [...prev, newNovel]);
       setCurrentId(id);
+      setDoc(doc(db, "novels", id), newNovel).catch(console.error); // ซิงค์เรื่องใหม่
     } else {
       updateNovel(editingNovelInfo.id, data);
     }
@@ -114,6 +159,7 @@ export default function NovelLibraryApp() {
     setNovels((prev) => prev.filter((n) => n.id !== id));
     setEditingNovelInfo(null);
     setCurrentId(null);
+    deleteDoc(doc(db, "novels", id)).catch(console.error); // ลบจาก Cloud
   }
 
   function addChapter() {
@@ -155,6 +201,15 @@ export default function NovelLibraryApp() {
     setOpenChapter(null);
   }
 
+  // หน้าจอโหลดข้อมูลตอนเข้าแอปครั้งแรก
+  if (!isLoaded) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#12161d", color: "#c9a15a", fontFamily: "'Sarabun', sans-serif" }}>
+        <h3>กำลังซิงค์ข้อมูลจากคลาวด์... ☁️</h3>
+      </div>
+    );
+  }
+
   return (
     <div style={{ fontFamily: "'Sarabun', sans-serif", background: "#12161d", minHeight: "100vh", color: "#e8e3d8" }}>
       <style>{`
@@ -185,7 +240,7 @@ export default function NovelLibraryApp() {
             setIsNewChapter(isNew);
           }}
           onAddChapter={addChapter}
-          onForceSave={forceSaveToLocal} // 🟢 ส่งฟังก์ชันไปให้ปุ่มหน้าหลัก
+          onForceSave={forceSaveToCloud}
         />
       )}
 
@@ -297,7 +352,7 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
 
 function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave }) {
   const sorted = useMemo(() => [...novel.chapters].sort((a, b) => a.order - b.order), [novel.chapters]);
-  const [savedAlert, setSavedAlert] = useState(false); // 🟢 สถานะการกดเซฟหน้าหลัก
+  const [savedAlert, setSavedAlert] = useState(false);
 
   function handleCoverPick(e) {
     const file = e.target.files?.[0];
@@ -307,16 +362,14 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
     reader.readAsDataURL(file);
   }
 
-  // 🟢 ฟังก์ชันเวลากดปุ่มเซฟ
   const handleManualSave = () => {
     if (onForceSave) onForceSave();
     setSavedAlert(true);
-    setTimeout(() => setSavedAlert(false), 2000); // คืนค่าปุ่มหลัง 2 วิ
+    setTimeout(() => setSavedAlert(false), 2000);
   };
 
   return (
     <div>
-      {/* 🟢 อัปเดต Header หน้าหลัก เพิ่มปุ่มเซฟ */}
       <div style={{ position: "sticky", top: 0, zIndex: 10, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#12161dee", backdropFilter: "blur(6px)", width: "100%" }}>
         <button
           onClick={onBack}
@@ -340,7 +393,7 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
             transition: "all 0.2s"
           }}
         >
-          {savedAlert ? "✓ บันทึกแล้ว" : "💾 บันทึก"}
+          {savedAlert ? "✓ บันทึกบนคลาวด์" : "☁️ บันทึกขึ้นคลาวด์"}
         </button>
       </div>
 
@@ -935,7 +988,6 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
-  // 🟢 แก้ไขฟังก์ชันบันทึกให้ส่งข้อมูลชื่อเรื่องและรูปภาพหน้าปกติดไปด้วยทุกครั้ง และเด้งกลับหน้าแรกทันที
   const triggerSave = () => {
     try {
       const payload = {
@@ -947,7 +999,7 @@ ${content}`;
         updatedAt: Date.now()
       };
       onSave(payload);
-      onCancel(); // เด้งออกหน้าแรกทันทีเพื่อยืนยันการบันทึก
+      onCancel(); 
     } catch (err) {
       alert("เกิดข้อผิดพลาดในการบันทึก: " + err.message);
     }
@@ -975,16 +1027,10 @@ ${content}`;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#f4ede0", zIndex: 50, display: "flex", flexDirection: "column" }}>
-      {/* Toolbar */}
       <div
         style={{
-          flexShrink: 0,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "14px 16px",
-          background: "#1a202a",
-          borderBottom: "1px solid #2a3140",
+          flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "14px 16px", background: "#1a202a", borderBottom: "1px solid #2a3140",
         }}
       >
         <button onClick={onCancel} style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
@@ -1007,7 +1053,7 @@ ${content}`;
             onClick={triggerSave}
             style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
           >
-            บันทึก
+            บันทึก (Cloud)
           </button>
         </div>
       </div>
@@ -1033,16 +1079,10 @@ ${content}`;
         </form>
       )}
 
-      {/* Sub-bar */}
       <div
         style={{
-          flexShrink: 0,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "10px 16px",
-          background: "#efe6d3",
-          borderBottom: "1px solid #ddd0b3",
+          flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "10px 16px", background: "#efe6d3", borderBottom: "1px solid #ddd0b3",
         }}
       >
         <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#8a7c5e" }}>
@@ -1067,184 +1107,54 @@ ${content}`;
         </div>
       </div>
 
-      {/* Writing area */}
       <div style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
         <div style={{ padding: "20px 18px 60px" }}>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="ชื่อตอน (ไม่บังคับ)"
-            style={{
-              width: "100%",
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              fontFamily: "'Noto Serif Thai', serif",
-              fontSize: fontSize + 4,
-              fontWeight: 700,
-              marginBottom: 14,
-              color: "#221d14",
-            }}
+            style={{ width: "100%", border: "none", outline: "none", background: "transparent", fontFamily: "'Noto Serif Thai', serif", fontSize: fontSize + 4, fontWeight: 700, marginBottom: 14, color: "#221d14" }}
           />
 
-          {/* โซนปุ่มเครื่องมือ */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-            <span style={{ fontSize: 12, color: "#8a7c5e" }}>
-              💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
-            </span>
+            <span style={{ fontSize: 12, color: "#8a7c5e" }}>💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ</span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
-              <button
-                onClick={() => setShowFindReplace(!showFindReplace)}
-                style={{
-                  background: showFindReplace ? "#d0c3a5" : "#efe6d3",
-                  border: "1px solid #cabb98",
-                  color: "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  flex: "1 1 auto"
-                }}
-              >
+              <button onClick={() => setShowFindReplace(!showFindReplace)} style={{ background: showFindReplace ? "#d0c3a5" : "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
                 🔍 ค้นหา/แทนที่
               </button>
-
-              <button
-                onClick={handleFixDialogueQuotes}
-                style={{
-                  background: "#efe6d3",
-                  border: "1px solid #cabb98",
-                  color: "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  flex: "1 1 auto"
-                }}
-              >
+              <button onClick={handleFixDialogueQuotes} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
                 💬 ตรวจ/ใส่ "..."
               </button>
-
-              <button
-                onClick={handleGeminiProofread}
-                disabled={isAiProcessing}
-                style={{
-                  background: isAiProcessing ? "#d0c3a5" : "#1a202a",
-                  border: "1px solid #c9a15a",
-                  color: "#c9a15a",
-                  borderRadius: 6,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: isAiProcessing ? "wait" : "pointer",
-                  fontWeight: 600,
-                  flex: "1 1 auto"
-                }}
-              >
+              <button onClick={handleGeminiProofread} disabled={isAiProcessing} style={{ background: isAiProcessing ? "#d0c3a5" : "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: isAiProcessing ? "wait" : "pointer", fontWeight: 600, flex: "1 1 auto" }}>
                 {isAiProcessing ? `⏳ (${progress}%)` : `🤖 AI ตรวจสลับคีย์ (${keyCount})`}
               </button>
-
-              <button
-                onClick={handleCheckPronouns}
-                disabled={isAiProcessing}
-                style={{
-                  background: "#efe6d3",
-                  border: "1px solid #cabb98",
-                  color: "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  flex: "1 1 auto"
-                }}
-              >
+              <button onClick={handleCheckPronouns} disabled={isAiProcessing} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
                 👥 ตรวจสรรพนาม
               </button>
-
-              <button
-                onClick={handleCopyContent}
-                style={{
-                  background: copied ? "#d4edda" : "#efe6d3",
-                  border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"),
-                  color: copied ? "#155724" : "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  flex: "1 1 auto",
-                  transition: "all 0.2s"
-                }}
-              >
+              <button onClick={handleCopyContent} style={{ background: copied ? "#d4edda" : "#efe6d3", border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"), color: copied ? "#155724" : "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto", transition: "all 0.2s" }}>
                 {copied ? "✓ คัดลอกแล้ว!" : "📋 คัดลอกเนื้อหา"}
               </button>
-
-              <button
-                onClick={handleAutoIndent}
-                style={{
-                  background: "#efe6d3",
-                  border: "1px solid #cabb98",
-                  color: "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  flex: "1 1 auto"
-                }}
-              >
+              <button onClick={handleAutoIndent} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
                 ✨ จัดย่อหน้าทั้งหมด
               </button>
             </div>
           </div>
 
-          {/* แถบ ค้นหา/แทนที่ */}
           {showFindReplace && (
             <div style={{ display: "flex", gap: 8, marginBottom: 12, background: "#efe6d3", padding: "12px", borderRadius: 8, border: "1px solid #ddd0b3", flexDirection: "column" }}>
               <div style={{ display: "flex", gap: 8, width: "100%" }}>
-                <input
-                  type="text"
-                  placeholder="ค้นหาคำ..."
-                  value={searchWord}
-                  onChange={(e) => setSearchWord(e.target.value)}
-                  style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
-                />
-                <span style={{ fontSize: 12, color: "#6a5c40", fontWeight: 600, alignSelf: "center", minWidth: 60, textAlign: "right" }}>
-                  พบ {matchCount} คำ
-                </span>
+                <input type="text" placeholder="ค้นหาคำ..." value={searchWord} onChange={(e) => setSearchWord(e.target.value)} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }} />
+                <span style={{ fontSize: 12, color: "#6a5c40", fontWeight: 600, alignSelf: "center", minWidth: 60, textAlign: "right" }}>พบ {matchCount} คำ</span>
               </div>
               <div style={{ display: "flex", gap: 8, width: "100%" }}>
-                <input
-                  type="text"
-                  placeholder="แทนที่ด้วย..."
-                  value={replaceWord}
-                  onChange={(e) => setReplaceWord(e.target.value)}
-                  style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
-                />
-                <button
-                  onClick={handleReplaceAll}
-                  disabled={matchCount === 0}
-                  style={{
-                    background: matchCount > 0 ? "#1a202a" : "#d0c3a5",
-                    border: "none",
-                    color: matchCount > 0 ? "#c9a15a" : "#8a7c5e",
-                    padding: "8px 14px",
-                    borderRadius: 6,
-                    fontWeight: 600,
-                    fontSize: 12,
-                    cursor: matchCount > 0 ? "pointer" : "not-allowed",
-                    transition: "all 0.2s"
-                  }}
-                >
+                <input type="text" placeholder="แทนที่ด้วย..." value={replaceWord} onChange={(e) => setReplaceWord(e.target.value)} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }} />
+                <button onClick={handleReplaceAll} disabled={matchCount === 0} style={{ background: matchCount > 0 ? "#1a202a" : "#d0c3a5", border: "none", color: matchCount > 0 ? "#c9a15a" : "#8a7c5e", padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: matchCount > 0 ? "pointer" : "not-allowed", transition: "all 0.2s" }}>
                   แทนที่ทั้งหมด
                 </button>
               </div>
             </div>
           )}
 
-          {/* แถบ Progress Bar */}
           {isAiProcessing && (
             <div style={{ marginBottom: 12, background: "#efe6d3", borderRadius: 8, padding: 8, border: "1px solid #ddd0b3" }}>
               <div style={{ fontSize: 12, color: "#4a3f2a", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
@@ -1252,14 +1162,7 @@ ${content}`;
                 <span style={{ fontWeight: 700 }}>{progress}%</span>
               </div>
               <div style={{ width: "100%", height: 8, background: "#d0c3a5", borderRadius: 4, overflow: "hidden" }}>
-                <div
-                  style={{
-                    width: `${progress}%`,
-                    height: "100%",
-                    background: "#c9a15a",
-                    transition: "width 0.3s ease"
-                  }}
-                />
+                <div style={{ width: `${progress}%`, height: "100%", background: "#c9a15a", transition: "width 0.3s ease" }} />
               </div>
             </div>
           )}
@@ -1276,53 +1179,22 @@ ${content}`;
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="เริ่มเขียนตอนนี้..."
-            style={{
-              width: "100%",
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              resize: "none",
-              fontSize: fontSize,
-              lineHeight: 1.75,
-              letterSpacing: "0.2px",
-              color: "#2a2318",
-              minHeight: "60vh",
-            }}
+            style={{ width: "100%", border: "none", outline: "none", background: "transparent", resize: "none", fontSize: fontSize, lineHeight: 1.75, letterSpacing: "0.2px", color: "#2a2318", minHeight: "60vh" }}
           />
 
           <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <span>📝 {wordCount(content)} คำ</span>
-            <span>•</span>
-            <span>🔤 {charCountTotal} ตัวอักษร</span>
-            <span>•</span>
-            <span>(ไม่รวมเว้นวรรค: {charCountNoSpaces})</span>
+            <span>📝 {wordCount(content)} คำ</span><span>•</span><span>🔤 {charCountTotal} ตัวอักษร</span><span>•</span><span>(ไม่รวมเว้นวรรค: {charCountNoSpaces})</span>
           </div>
 
           <button
             onClick={triggerSaveAndNext}
-            style={{
-              width: "100%",
-              marginTop: 22,
-              background: "#1a202a",
-              border: "1px solid #c9a15a",
-              color: "#c9a15a",
-              fontWeight: 600,
-              fontSize: 14.5,
-              padding: "13px",
-              borderRadius: 10,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-            }}
+            style={{ width: "100%", marginTop: 22, background: "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", fontWeight: 600, fontSize: 14.5, padding: "13px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
           >
             บันทึกและสร้างตอนถัดไป <ArrowRight size={16} />
           </button>
         </div>
       </div>
 
-      {/* Modal Popup ตรวจสอบสรรพนาม */}
       {showPronounModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div style={{ background: "#f4ede0", borderRadius: 12, width: "100%", maxWidth: 500, padding: 20, border: "1px solid #cabb98", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
@@ -1330,7 +1202,6 @@ ${content}`;
             <p style={{ fontSize: 13, color: "#6a5c40", margin: "0 0 14px 0" }}>
               ตรวจสอบพบคำสรรพนาม (รวมถึงคำที่อาจหลุดมาจากยุคปัจจุบัน) สามารถพิมพ์คำที่ต้องการเปลี่ยนแทนที่ลงในช่องขวาได้เลยครับ:
             </p>
-
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
               {pronounResults.length === 0 ? (
                 <div style={{ textAlign: "center", padding: 20, color: "#6a5c40" }}>ไม่พบคำสรรพนามในตอนนี้</div>
@@ -1342,34 +1213,15 @@ ${content}`;
                       <div style={{ fontSize: 11, color: "#6a5c40" }}>คำแนะนำ: {item.suggestion}</div>
                     </div>
                     <div style={{ width: 120 }}>
-                      <input
-                        type="text"
-                        placeholder="เปลี่ยนเป็น..."
-                        value={replacementMap[item.word] || ""}
-                        onChange={(e) => setReplacementMap({ ...replacementMap, [item.word]: e.target.value })}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: 4, border: "1px solid #cabb98", background: "#fff", fontSize: 12 }}
-                      />
+                      <input type="text" placeholder="เปลี่ยนเป็น..." value={replacementMap[item.word] || ""} onChange={(e) => setReplacementMap({ ...replacementMap, [item.word]: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 4, border: "1px solid #cabb98", background: "#fff", fontSize: 12 }} />
                     </div>
                   </div>
                 ))
               )}
             </div>
-
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button
-                onClick={() => setShowPronounModal(false)}
-                style={{ background: "#d0c3a5", border: "none", color: "#221d14", padding: "8px 16px", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}
-              >
-                ยกเลิก
-              </button>
-              {pronounResults.length > 0 && (
-                <button
-                  onClick={applyPronounReplacements}
-                  style={{ background: "#1a202a", border: "none", color: "#c9a15a", padding: "8px 16px", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}
-                >
-                  ยืนยันเปลี่ยนคำทั้งหมด ✨
-                </button>
-              )}
+              <button onClick={() => setShowPronounModal(false)} style={{ background: "#d0c3a5", border: "none", color: "#221d14", padding: "8px 16px", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>ยกเลิก</button>
+              {pronounResults.length > 0 && <button onClick={applyPronounReplacements} style={{ background: "#1a202a", border: "none", color: "#c9a15a", padding: "8px 16px", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>ยืนยันเปลี่ยนคำทั้งหมด ✨</button>}
             </div>
           </div>
         </div>
