@@ -3,7 +3,6 @@ import { ChevronLeft, ChevronRight, ArrowRight, Plus, Pencil, Image as ImageIcon
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc } from "firebase/firestore";
 
-// 🟢 1. ตั้งค่าเชื่อมต่อ Google Firebase
 const firebaseConfig = {
   apiKey: "AIzaSyCyZuVUuCeZ-5Fajn4P0WTWdCI2ceHG4pI",
   authDomain: "my-novel-notebook.firebaseapp.com",
@@ -15,6 +14,33 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+
+// 🟢 ฟังก์ชันย่อขนาดรูปภาพอัตโนมัติไม่ให้เกินโควตา Firebase
+function compressImage(base64Str, maxWidth = 300, quality = 0.7) {
+  return new Promise((resolve) => {
+    if (!base64Str || !base64Str.startsWith("data:image")) {
+      resolve(base64Str);
+      return;
+    }
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let width = img.width;
+      let height = img.height;
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => resolve(base64Str);
+  });
+}
 
 function timeAgo(ts) {
   const diff = Date.now() - ts;
@@ -34,7 +60,7 @@ function wordCount(text) {
 }
 
 function novelUpdatedAt(novel) {
-  if (!novel.chapters.length) return novel.createdAt;
+  if (!novel.chapters || !novel.chapters.length) return novel.createdAt;
   return Math.max(novel.createdAt, ...novel.chapters.map((c) => c.updatedAt));
 }
 
@@ -50,21 +76,13 @@ const seedNovels = [
       { id: "c2", order: 2, title: "", content: "", updatedAt: Date.now() - 1000 * 60 * 60 * 10 },
     ],
   },
-  {
-    id: "n2",
-    title: "เงาใต้แสงจันทร์",
-    synopsis: "",
-    cover: null,
-    createdAt: Date.now() - 1000 * 60 * 60 * 24,
-    chapters: [],
-  },
 ];
 
 const STORAGE_KEY = "novel-writer-app-data";
 
 export default function NovelLibraryApp() {
   const [novels, setNovels] = useState([]);
-  const [isLoaded, setIsLoaded] = useState(false); // เช็กว่าดึงข้อมูลจาก Cloud เสร็จหรือยัง
+  const [isLoaded, setIsLoaded] = useState(false);
   const [currentId, setCurrentId] = useState(null);
   const [query, setQuery] = useState("");
   const [editingNovelInfo, setEditingNovelInfo] = useState(null); 
@@ -72,7 +90,6 @@ export default function NovelLibraryApp() {
   const [isNewChapter, setIsNewChapter] = useState(false);
   const fileInputRef = useRef(null);
 
-  // 🟢 2. โหลดข้อมูลจาก Firebase เมื่อเปิดแอป
   useEffect(() => {
     async function fetchFromFirebase() {
       try {
@@ -82,7 +99,6 @@ export default function NovelLibraryApp() {
         if (fetched.length > 0) {
           setNovels(fetched);
         } else {
-          // ถ้าเปิดครั้งแรกและยังไม่มีข้อมูล ให้ใช้ seedNovels แล้วเซฟขึ้น Cloud
           setNovels(seedNovels);
           for (const n of seedNovels) {
             await setDoc(doc(db, "novels", n.id), n);
@@ -90,7 +106,6 @@ export default function NovelLibraryApp() {
         }
       } catch (e) {
         console.error("โหลดข้อมูลจาก Firebase ล้มเหลว", e);
-        // Fallback: ดึงจากเครื่องหากเน็ตมีปัญหา
         const local = localStorage.getItem(STORAGE_KEY);
         if (local) setNovels(JSON.parse(local));
         else setNovels(seedNovels);
@@ -101,7 +116,6 @@ export default function NovelLibraryApp() {
     fetchFromFirebase();
   }, []);
 
-  // 🟢 3. แบ็กอัปข้อมูลลงเครื่องด้วยเสมอ
   useEffect(() => {
     if (isLoaded) {
       try {
@@ -110,14 +124,14 @@ export default function NovelLibraryApp() {
     }
   }, [novels, isLoaded]);
 
-  // ฟังก์ชันบังคับเซฟลง Cloud 
   const forceSaveToCloud = async () => {
     try {
       for (const n of novels) {
         await setDoc(doc(db, "novels", n.id), n);
       }
+      alert("✅ บันทึกขึ้นคลาวด์สำเร็จ!");
     } catch (e) {
-      console.error("บังคับบันทึกข้อมูลล้มเหลว", e);
+      alert("❌ บันทึกไม่สำเร็จ: ขนาดข้อมูลอาจใหญ่เกินไป");
     }
   };
 
@@ -126,31 +140,40 @@ export default function NovelLibraryApp() {
   const filteredNovels = useMemo(() => {
     const q = query.trim().toLowerCase();
     return [...novels]
-      .filter((n) => !q || n.title.toLowerCase().includes(q))
+      .filter((n) => !q || (n.title && n.title.toLowerCase().includes(q)))
       .sort((a, b) => novelUpdatedAt(b) - novelUpdatedAt(a));
   }, [novels, query]);
 
-  // 🟢 4. อัปเดตนิยายและซิงค์ขึ้น Firebase ทันที
-  function updateNovel(id, patch) {
+  async function updateNovel(id, patch) {
+    let processedPatch = { ...patch };
+    if (processedPatch.cover) {
+      processedPatch.cover = await compressImage(processedPatch.cover);
+    }
+
     setNovels((prev) => {
-      const nextNovels = prev.map((n) => (n.id === id ? { ...n, ...patch } : n));
+      const nextNovels = prev.map((n) => (n.id === id ? { ...n, ...processedPatch } : n));
       const targetNovel = nextNovels.find(n => n.id === id);
       if (targetNovel) {
-        setDoc(doc(db, "novels", id), targetNovel).catch(console.error);
+        setDoc(doc(db, "novels", id), targetNovel).catch((err) => console.error("Sync error:", err));
       }
       return nextNovels;
     });
   }
 
-  function saveNovelInfo(data) {
+  async function saveNovelInfo(data) {
+    let processedData = { ...data };
+    if (processedData.cover) {
+      processedData.cover = await compressImage(processedData.cover);
+    }
+
     if (editingNovelInfo === "new") {
       const id = `n-${Date.now()}`;
-      const newNovel = { id, chapters: [], createdAt: Date.now(), ...data };
+      const newNovel = { id, chapters: [], createdAt: Date.now(), ...processedData };
       setNovels((prev) => [...prev, newNovel]);
       setCurrentId(id);
-      setDoc(doc(db, "novels", id), newNovel).catch(console.error); // ซิงค์เรื่องใหม่
+      await setDoc(doc(db, "novels", id), newNovel).catch(console.error);
     } else {
-      updateNovel(editingNovelInfo.id, data);
+      await updateNovel(editingNovelInfo.id, processedData);
     }
     setEditingNovelInfo(null);
   }
@@ -159,23 +182,25 @@ export default function NovelLibraryApp() {
     setNovels((prev) => prev.filter((n) => n.id !== id));
     setEditingNovelInfo(null);
     setCurrentId(null);
-    deleteDoc(doc(db, "novels", id)).catch(console.error); // ลบจาก Cloud
+    deleteDoc(doc(db, "novels", id)).catch(console.error);
   }
 
   function addChapter() {
     if (!current) return;
-    const nextOrder = current.chapters.length ? Math.max(...current.chapters.map((c) => c.order)) + 1 : 1;
+    const chapters = current.chapters || [];
+    const nextOrder = chapters.length ? Math.max(...chapters.map((c) => c.order)) + 1 : 1;
     setOpenChapter({ id: null, order: nextOrder, title: "", content: "", updatedAt: Date.now() });
     setIsNewChapter(true);
   }
 
   function saveChapter(ch) {
     if (!current) return;
+    const chapters = current.chapters || [];
     let nextChapters;
     if (isNewChapter) {
-      nextChapters = [...current.chapters, { ...ch, id: `c-${Date.now()}`, updatedAt: Date.now() }];
+      nextChapters = [...chapters, { ...ch, id: `c-${Date.now()}`, updatedAt: Date.now() }];
     } else {
-      nextChapters = current.chapters.map((c) => (c.id === ch.id ? { ...ch, updatedAt: Date.now() } : c));
+      nextChapters = chapters.map((c) => (c.id === ch.id ? { ...ch, updatedAt: Date.now() } : c));
     }
     updateNovel(current.id, { chapters: nextChapters });
     setOpenChapter(null);
@@ -183,11 +208,12 @@ export default function NovelLibraryApp() {
 
   function saveChapterAndNext(ch) {
     if (!current) return;
+    const chapters = current.chapters || [];
     let nextChapters;
     if (isNewChapter) {
-      nextChapters = [...current.chapters, { ...ch, id: `c-${Date.now()}`, updatedAt: Date.now() }];
+      nextChapters = [...chapters, { ...ch, id: `c-${Date.now()}`, updatedAt: Date.now() }];
     } else {
-      nextChapters = current.chapters.map((c) => (c.id === ch.id ? { ...ch, updatedAt: Date.now() } : c));
+      nextChapters = chapters.map((c) => (c.id === ch.id ? { ...ch, updatedAt: Date.now() } : c));
     }
     updateNovel(current.id, { chapters: nextChapters });
     const nextOrder = Math.max(...nextChapters.map((c) => c.order)) + 1;
@@ -197,11 +223,11 @@ export default function NovelLibraryApp() {
 
   function deleteChapter(id) {
     if (!current) return;
-    updateNovel(current.id, { chapters: current.chapters.filter((c) => c.id !== id) });
+    const chapters = current.chapters || [];
+    updateNovel(current.id, { chapters: chapters.filter((c) => c.id !== id) });
     setOpenChapter(null);
   }
 
-  // หน้าจอโหลดข้อมูลตอนเข้าแอปครั้งแรก
   if (!isLoaded) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#12161d", color: "#c9a15a", fontFamily: "'Sarabun', sans-serif" }}>
@@ -327,7 +353,7 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
                   {n.title || "ยังไม่มีชื่อเรื่อง"}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#7d8494" }}>
-                  <BookOpen size={10} /> {n.chapters.length} ตอน
+                  <BookOpen size={10} /> {n.chapters ? n.chapters.length : 0} ตอน
                 </div>
               </button>
             ))}
@@ -351,7 +377,8 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
 }
 
 function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave }) {
-  const sorted = useMemo(() => [...novel.chapters].sort((a, b) => a.order - b.order), [novel.chapters]);
+  const chapters = novel.chapters || [];
+  const sorted = useMemo(() => [...chapters].sort((a, b) => a.order - b.order), [chapters]);
   const [savedAlert, setSavedAlert] = useState(false);
 
   function handleCoverPick(e) {
@@ -432,7 +459,7 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
               </button>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "#9099a8" }}>
-              <BookOpen size={12} /> {novel.chapters.length} ตอน
+              <BookOpen size={12} /> {chapters.length} ตอน
             </div>
           </div>
         </div>
@@ -445,7 +472,7 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
       <div style={{ padding: "22px 18px 100px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #262d3a", paddingBottom: 10, marginBottom: 4 }}>
           <span style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 15, fontWeight: 600, color: "#c9a15a" }}>ตอนทั้งหมด</span>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#5c6372" }}>{novel.chapters.length} รายการ</span>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#5c6372" }}>{chapters.length} รายการ</span>
         </div>
 
         {sorted.length === 0 ? (
@@ -502,9 +529,9 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
 }
 
 function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
-  const [title, setTitle] = useState(novel.title);
-  const [synopsis, setSynopsis] = useState(novel.synopsis);
-  const [cover, setCover] = useState(novel.cover);
+  const [title, setTitle] = useState(novel.title || "");
+  const [synopsis, setSynopsis] = useState(novel.synopsis || "");
+  const [cover, setCover] = useState(novel.cover || null);
   const fileRef = useRef(null);
 
   function handlePick(e) {
@@ -554,7 +581,7 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
 
         <label style={{ fontSize: 12, color: "#7d8494" }}>หรือวางลิงก์รูปภาพ (URL)</label>
         <input
-          value={cover && cover.startsWith("http") ? cover : ""}
+          value={cover && typeof cover === "string" && cover.startsWith("http") ? cover : ""}
           onChange={(e) => setCover(e.target.value)}
           placeholder="https://..."
           style={{ width: "100%", background: "#12161d", border: "1px solid #2a3140", borderRadius: 8, padding: "10px 12px", color: "#e8e3d8", fontSize: 13, margin: "6px 0 16px", outline: "none", fontFamily: "'JetBrains Mono', monospace" }}
@@ -1053,7 +1080,7 @@ ${content}`;
             onClick={triggerSave}
             style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
           >
-            บันทึก (Cloud)
+            บันทึก
           </button>
         </div>
       </div>
