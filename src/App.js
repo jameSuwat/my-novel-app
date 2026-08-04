@@ -557,6 +557,12 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [pronounResults, setPronounResults] = useState([]);
   const [replacementMap, setReplacementMap] = useState({});
 
+  // 🟢 State สำหรับระบบ ค้นหา/แทนที่
+  const [showFindReplace, setShowFindReplace] = useState(false);
+  const [searchWord, setSearchWord] = useState("");
+  const [replaceWord, setReplaceWord] = useState("");
+  const [matchCount, setMatchCount] = useState(0);
+
   const [fontSize, setFontSize] = useState(() => {
     try {
       const saved = localStorage.getItem(FONT_SIZE_KEY);
@@ -576,7 +582,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   useEffect(() => {
     setTitle(chapter.title || "");
     setContent(chapter.content || "");
-  }, [chapter.id, chapter.order, chapter.title, chapter.content]);
+  }, [chapter.id, chapter.order]);
 
   useEffect(() => {
     if (contentRef.current) {
@@ -589,6 +595,31 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       scrollContainer.scrollTop = currentScroll;
     }
   }, [content, fontSize]);
+
+  // 🟢 Effect เพื่อนับจำนวนคำที่ค้นหาแบบ Real-time
+  useEffect(() => {
+    if (!searchWord) {
+      setMatchCount(0);
+      return;
+    }
+    // ป้องกัน Error จากตัวอักษรพิเศษใน Regex
+    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escapeRegExp(searchWord), "g");
+    const matches = content.match(regex);
+    setMatchCount(matches ? matches.length : 0);
+  }, [searchWord, content]);
+
+  // 🟢 ฟังก์ชันแทนที่คำทั้งหมดในทีเดียว
+  const handleReplaceAll = () => {
+    if (!searchWord) return;
+    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escapeRegExp(searchWord), "g");
+    const newContent = content.replace(regex, replaceWord);
+    
+    setContent(newContent);
+    setTypoNotice(`✨ แทนที่คำว่า "${searchWord}" เป็น "${replaceWord}" จำนวน ${matchCount} จุดเรียบร้อย!`);
+    setTimeout(() => setTypoNotice(""), 4000);
+  };
 
   const handleAutoIndent = () => {
     if (!content) return;
@@ -1062,6 +1093,24 @@ ${content}`;
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              
+              {/* 🟢 ปุ่มเปิด/ปิด แถบ ค้นหา/แทนที่ */}
+              <button
+                onClick={() => setShowFindReplace(!showFindReplace)}
+                style={{
+                  background: showFindReplace ? "#d0c3a5" : "#efe6d3",
+                  border: "1px solid #cabb98",
+                  color: "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600
+                }}
+              >
+                🔍 ค้นหา/แทนที่
+              </button>
+
               <button
                 onClick={handleFixDialogueQuotes}
                 style={{
@@ -1146,6 +1195,46 @@ ${content}`;
               </button>
             </div>
           </div>
+
+          {/* 🟢 แถบ ค้นหา/แทนที่ (ซ่อน/แสดงได้) */}
+          {showFindReplace && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, background: "#efe6d3", padding: "10px", borderRadius: 8, border: "1px solid #ddd0b3", flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                type="text"
+                placeholder="ค้นหาคำ..."
+                value={searchWord}
+                onChange={(e) => setSearchWord(e.target.value)}
+                style={{ flex: 1, minWidth: 120, padding: "6px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
+              />
+              <span style={{ fontSize: 12, color: "#6a5c40", minWidth: 60, fontWeight: 600 }}>
+                พบ {matchCount} คำ
+              </span>
+              <input
+                type="text"
+                placeholder="แทนที่ด้วย..."
+                value={replaceWord}
+                onChange={(e) => setReplaceWord(e.target.value)}
+                style={{ flex: 1, minWidth: 120, padding: "6px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
+              />
+              <button
+                onClick={handleReplaceAll}
+                disabled={matchCount === 0}
+                style={{
+                  background: matchCount > 0 ? "#1a202a" : "#d0c3a5",
+                  border: "none",
+                  color: matchCount > 0 ? "#c9a15a" : "#8a7c5e",
+                  padding: "8px 12px",
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: 12,
+                  cursor: matchCount > 0 ? "pointer" : "not-allowed",
+                  transition: "all 0.2s"
+                }}
+              >
+                แทนที่ทั้งหมด
+              </button>
+            </div>
+          )}
 
           {/* แถบ Progress Bar */}
           {isAiProcessing && (
