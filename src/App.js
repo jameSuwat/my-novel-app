@@ -795,6 +795,7 @@ ${para}`;
     }
   };
 
+  // 🟢 แก้ไขฟังก์ชันตรวจสอบสรรพนามให้สุ่มสลับใช้ทุก API Keys ที่มี
   const handleCheckPronouns = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนตรวจสอบสรรพนามครับ");
@@ -826,7 +827,7 @@ ${content}`;
     let success = false;
     let rawText = "[]";
 
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       const currentKey = keyList[Math.floor(Math.random() * keyList.length)];
       try {
         const response = await fetch(
@@ -853,7 +854,7 @@ ${content}`;
         success = true;
         break;
       } catch (err) {
-        if (attempt === 4) {
+        if (attempt === 7) {
           alert("เกิดข้อผิดพลาดในการตรวจสอบสรรพนาม: " + err.message);
         }
       }
