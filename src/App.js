@@ -557,7 +557,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [pronounResults, setPronounResults] = useState([]);
   const [replacementMap, setReplacementMap] = useState({});
 
-  // 🟢 State สำหรับระบบ ค้นหา/แทนที่
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [searchWord, setSearchWord] = useState("");
   const [replaceWord, setReplaceWord] = useState("");
@@ -582,7 +581,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   useEffect(() => {
     setTitle(chapter.title || "");
     setContent(chapter.content || "");
-  }, [chapter.id, chapter.order]);
+  }, [chapter.id, chapter.order, chapter.title, chapter.content]);
 
   useEffect(() => {
     if (contentRef.current) {
@@ -596,20 +595,17 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     }
   }, [content, fontSize]);
 
-  // 🟢 Effect เพื่อนับจำนวนคำที่ค้นหาแบบ Real-time
   useEffect(() => {
     if (!searchWord) {
       setMatchCount(0);
       return;
     }
-    // ป้องกัน Error จากตัวอักษรพิเศษใน Regex
     const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(escapeRegExp(searchWord), "g");
     const matches = content.match(regex);
     setMatchCount(matches ? matches.length : 0);
   }, [searchWord, content]);
 
-  // 🟢 ฟังก์ชันแทนที่คำทั้งหมดในทีเดียว
   const handleReplaceAll = () => {
     if (!searchWord) return;
     const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1087,14 +1083,13 @@ ${content}`;
             }}
           />
 
-          {/* โซนปุ่มเครื่องมือ */}
+          {/* โซนปุ่มเครื่องมือ (ปรับให้รองรับหน้าจอมือถือ) */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
             <span style={{ fontSize: 12, color: "#8a7c5e" }}>
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
               
-              {/* 🟢 ปุ่มเปิด/ปิด แถบ ค้นหา/แทนที่ */}
               <button
                 onClick={() => setShowFindReplace(!showFindReplace)}
                 style={{
@@ -1102,10 +1097,11 @@ ${content}`;
                   border: "1px solid #cabb98",
                   color: "#4a3f2a",
                   borderRadius: 6,
-                  padding: "4px 10px",
+                  padding: "6px 12px",
                   fontSize: 12,
                   cursor: "pointer",
-                  fontWeight: 600
+                  fontWeight: 600,
+                  flex: "1 1 auto"
                 }}
               >
                 🔍 ค้นหา/แทนที่
@@ -1118,10 +1114,11 @@ ${content}`;
                   border: "1px solid #cabb98",
                   color: "#4a3f2a",
                   borderRadius: 6,
-                  padding: "4px 10px",
+                  padding: "6px 12px",
                   fontSize: 12,
                   cursor: "pointer",
-                  fontWeight: 600
+                  fontWeight: 600,
+                  flex: "1 1 auto"
                 }}
               >
                 💬 ตรวจ/ใส่ "..."
@@ -1135,10 +1132,11 @@ ${content}`;
                   border: "1px solid #c9a15a",
                   color: "#c9a15a",
                   borderRadius: 6,
-                  padding: "4px 10px",
+                  padding: "6px 12px",
                   fontSize: 12,
                   cursor: isAiProcessing ? "wait" : "pointer",
-                  fontWeight: 600
+                  fontWeight: 600,
+                  flex: "1 1 auto"
                 }}
               >
                 {isAiProcessing ? `⏳ (${progress}%)` : `🤖 AI ตรวจสลับคีย์ (${keyCount})`}
@@ -1152,10 +1150,11 @@ ${content}`;
                   border: "1px solid #cabb98",
                   color: "#4a3f2a",
                   borderRadius: 6,
-                  padding: "4px 10px",
+                  padding: "6px 12px",
                   fontSize: 12,
                   cursor: "pointer",
-                  fontWeight: 600
+                  fontWeight: 600,
+                  flex: "1 1 auto"
                 }}
               >
                 👥 ตรวจสรรพนาม
@@ -1168,10 +1167,11 @@ ${content}`;
                   border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"),
                   color: copied ? "#155724" : "#4a3f2a",
                   borderRadius: 6,
-                  padding: "4px 10px",
+                  padding: "6px 12px",
                   fontSize: 12,
                   cursor: "pointer",
                   fontWeight: 600,
+                  flex: "1 1 auto",
                   transition: "all 0.2s"
                 }}
               >
@@ -1185,10 +1185,11 @@ ${content}`;
                   border: "1px solid #cabb98",
                   color: "#4a3f2a",
                   borderRadius: 6,
-                  padding: "4px 10px",
+                  padding: "6px 12px",
                   fontSize: 12,
                   cursor: "pointer",
-                  fontWeight: 600
+                  fontWeight: 600,
+                  flex: "1 1 auto"
                 }}
               >
                 ✨ จัดย่อหน้าทั้งหมด
@@ -1196,43 +1197,47 @@ ${content}`;
             </div>
           </div>
 
-          {/* 🟢 แถบ ค้นหา/แทนที่ (ซ่อน/แสดงได้) */}
+          {/* แถบ ค้นหา/แทนที่ (ปรับให้สวยงามบนมือถือ) */}
           {showFindReplace && (
-            <div style={{ display: "flex", gap: 8, marginBottom: 12, background: "#efe6d3", padding: "10px", borderRadius: 8, border: "1px solid #ddd0b3", flexWrap: "wrap", alignItems: "center" }}>
-              <input
-                type="text"
-                placeholder="ค้นหาคำ..."
-                value={searchWord}
-                onChange={(e) => setSearchWord(e.target.value)}
-                style={{ flex: 1, minWidth: 120, padding: "6px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
-              />
-              <span style={{ fontSize: 12, color: "#6a5c40", minWidth: 60, fontWeight: 600 }}>
-                พบ {matchCount} คำ
-              </span>
-              <input
-                type="text"
-                placeholder="แทนที่ด้วย..."
-                value={replaceWord}
-                onChange={(e) => setReplaceWord(e.target.value)}
-                style={{ flex: 1, minWidth: 120, padding: "6px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
-              />
-              <button
-                onClick={handleReplaceAll}
-                disabled={matchCount === 0}
-                style={{
-                  background: matchCount > 0 ? "#1a202a" : "#d0c3a5",
-                  border: "none",
-                  color: matchCount > 0 ? "#c9a15a" : "#8a7c5e",
-                  padding: "8px 12px",
-                  borderRadius: 6,
-                  fontWeight: 600,
-                  fontSize: 12,
-                  cursor: matchCount > 0 ? "pointer" : "not-allowed",
-                  transition: "all 0.2s"
-                }}
-              >
-                แทนที่ทั้งหมด
-              </button>
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, background: "#efe6d3", padding: "12px", borderRadius: 8, border: "1px solid #ddd0b3", flexDirection: "column" }}>
+              <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                <input
+                  type="text"
+                  placeholder="ค้นหาคำ..."
+                  value={searchWord}
+                  onChange={(e) => setSearchWord(e.target.value)}
+                  style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
+                />
+                <span style={{ fontSize: 12, color: "#6a5c40", fontWeight: 600, alignSelf: "center", minWidth: 60, textAlign: "right" }}>
+                  พบ {matchCount} คำ
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                <input
+                  type="text"
+                  placeholder="แทนที่ด้วย..."
+                  value={replaceWord}
+                  onChange={(e) => setReplaceWord(e.target.value)}
+                  style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #cabb98", fontSize: 13, background: "#fff", outline: "none" }}
+                />
+                <button
+                  onClick={handleReplaceAll}
+                  disabled={matchCount === 0}
+                  style={{
+                    background: matchCount > 0 ? "#1a202a" : "#d0c3a5",
+                    border: "none",
+                    color: matchCount > 0 ? "#c9a15a" : "#8a7c5e",
+                    padding: "8px 14px",
+                    borderRadius: 6,
+                    fontWeight: 600,
+                    fontSize: 12,
+                    cursor: matchCount > 0 ? "pointer" : "not-allowed",
+                    transition: "all 0.2s"
+                  }}
+                >
+                  แทนที่ทั้งหมด
+                </button>
+              </div>
             </div>
           )}
 
