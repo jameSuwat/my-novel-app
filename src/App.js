@@ -640,7 +640,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       .filter((k) => k.length > 0);
   };
 
-  // 1. ฟีเจอร์ตรวจสอบและใส่เครื่องหมาย "..." ให้บทสนทนาทันที
   const handleFixDialogueQuotes = () => {
     if (!content) return;
 
@@ -698,7 +697,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setTypoNotice(""), 4000);
   };
 
-  // 2 & 3. ระบบส่งข้อมูลแบบสลับคีย์อัตโนมัติ หน่วงเวลา (Delay) และแถบ Progress Bar
   const fetchWithRetry = async (para, keyList, retries = 3) => {
     if (!para.trim()) return para;
 
@@ -783,7 +781,6 @@ ${para}`;
         setProgress(currentPercent);
         setTypoNotice(`🤖 กำลังตรวจทาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
 
-        // หน่วงเวลา (Delay) ระหว่างการส่งแต่ละย่อหน้า ป้องกันชน Quota
         await new Promise((resolve) => setTimeout(resolve, 800));
       }
 
@@ -798,7 +795,6 @@ ${para}`;
     }
   };
 
-  // 4. ฟีเจอร์ตรวจสอบสรรพนามยุคโบราณและยุคปัจจุบัน พร้อมป๊อปอัพแก้ไข
   const handleCheckPronouns = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนตรวจสอบสรรพนามครับ");
