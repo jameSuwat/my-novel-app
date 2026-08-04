@@ -642,7 +642,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       .filter((k) => k.length > 0);
   };
 
-  // 🟢 💬 ฟังก์ชันตรวจสอบและใส่เครื่องหมาย "..." ทันที (รองรับทั้งไฮไลต์คลุมดำ หรือสแกนคำพูดพูดว่า/ถามว่า)
   const handleFixDialogueQuotes = () => {
     if (!content) return;
 
@@ -808,6 +807,7 @@ ${para}`;
     }
   };
 
+  // 🟢 🔍 ฟังก์ชันตรวจสอบสรรพนามข้ามยุค (รองรับ Multi-Key + Auto-Retry)
   const handleCheckPronouns = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนตรวจสอบสรรพนามครับ");
@@ -826,8 +826,7 @@ ${para}`;
     setIsAiProcessing(true);
     setTypoNotice("🔍 AI กำลังสแกนหาสรรพนามยุคปัจจุบัน/ข้ามยุค...");
 
-    try {
-      const promptText = `คุณคือนักวิเคราะห์วรรณกรรม ตรวจสอบเนื้อหานิยายภาษาไทยด้านล่างนี้ ค้นหาคำสรรพนามที่มักใช้ในยุคปัจจุบัน (เช่น ฉัน, เธอ, คุณ, ผม, นาย, แก, ชั้น, เรา, ค่ะ, คะ, ครับ, จ้า) ที่อาจหลุดมาในนิยายพีเรียดหรือนิยายโบราณ 
+    const promptText = `คุณคือนักวิเคราะห์วรรณกรรม ตรวจสอบเนื้อหานิยายภาษาไทยด้านล่างนี้ ค้นหาคำสรรพนามที่มักใช้ในยุคปัจจุบัน (เช่น ฉัน, เธอ, คุณ, ผม, นาย, แก, ชั้น, เรา, ค่ะ, คะ, ครับ, จ้า) ที่อาจหลุดมาในนิยายพีเรียดหรือนิยายโบราณ 
 ให้ส่งผลลัพธ์กลับมาในรูปแบบ JSON Array ของ Object โดยแต่ละ Object ต้องมีโครงสร้างดังนี้:
 [
   { "word": "คำที่พบ", "count": จำนวนครั้งที่พบ, "suggestion": "คำแนะนำเบื้องต้น" }
@@ -837,35 +836,59 @@ ${para}`;
 เนื้อหา:
 ${content}`;
 
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${keyList[0]}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }]
-          })
+    let success = false;
+    let rawText = "[]";
+
+    // วนลูปสลับคีย์และรองรับ Retry หากติด 429 Quota
+    for (let attempt = 0; attempt < keyList.length * 2; attempt++) {
+      const currentKey = keyList[attempt % keyList.length];
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: promptText }] }]
+            })
+          }
+        );
+
+        const data = await response.json();
+        if (data.error) {
+          if (data.error.code === 429) {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            continue; // ลองใช้คีย์ถัดไป
+          }
+          throw new Error(data.error.message);
         }
-      );
 
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
+        rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+        success = true;
+        break;
+      } catch (err) {
+        if (attempt === keyList.length * 2 - 1) {
+          alert("เกิดข้อผิดพลาดในการตรวจสอบสรรพนาม: " + err.message);
+        }
+      }
+    }
 
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
-      const cleanJson = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
-      const parsedResults = JSON.parse(cleanJson);
+    setIsAiProcessing(false);
+    setTypoNotice("");
 
-      setPronounResults(parsedResults);
-      const initialMap = {};
-      parsedResults.forEach(item => { initialMap[item.word] = ""; });
-      setReplacementMap(initialMap);
-      setShowPronounModal(true);
-      setTypoNotice("");
-    } catch (err) {
-      alert("เกิดข้อผิดพลาดในการตรวจสอบสรรพนาม: " + err.message);
-      setTypoNotice("");
-    } finally {
-      setIsAiProcessing(false);
+    if (success) {
+      try {
+        const cleanJson = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+        const parsedResults = JSON.parse(cleanJson);
+
+        setPronounResults(parsedResults);
+        const initialMap = {};
+        parsedResults.forEach(item => { initialMap[item.word] = ""; });
+        setReplacementMap(initialMap);
+        setShowPronounModal(true);
+      } catch (e) {
+        alert("ไม่สามารถแปลงข้อมูลผลลัพธ์จาก AI ได้ กรุณาลองใหม่อีกครั้ง");
+      }
     }
   };
 
@@ -1108,7 +1131,7 @@ ${content}`;
             </div>
           </div>
 
-          {/* 🟢 แถบ Progress Bar แสดงเปอร์เซ็นต์ความคืบหน้า */}
+          {/* แถบ Progress Bar */}
           {isAiProcessing && (
             <div style={{ marginBottom: 12, background: "#efe6d3", borderRadius: 8, padding: 8, border: "1px solid #ddd0b3" }}>
               <div style={{ fontSize: 12, color: "#4a3f2a", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
