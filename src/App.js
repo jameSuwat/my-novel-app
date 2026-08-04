@@ -536,7 +536,7 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
   );
 }
 
-const FONT_MIN = 14;
+const FONT_MIN = 13;
 const FONT_MAX = 28;
 const FONT_SIZE_KEY = "novel-writer-font-size-v2";
 const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys-v2";
@@ -935,17 +935,19 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
-  // 🟢 กดบันทึกปุ๊บ เซฟข้อมูลครบถ้วน และเด้งออกหน้าแรกทันที
+  // 🟢 แก้ไขฟังก์ชันบันทึกให้ส่งข้อมูลชื่อเรื่องและรูปภาพหน้าปกติดไปด้วยทุกครั้ง และเด้งกลับหน้าแรกทันที
   const triggerSave = () => {
     try {
       const payload = {
         ...chapter,
         title: title.trim(),
         content: content,
+        novelTitle: chapter.novelTitle || "",
+        coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
       onSave(payload);
-      onCancel(); // เด้งกลับหน้าแรกทันที
+      onCancel(); // เด้งออกหน้าแรกทันทีเพื่อยืนยันการบันทึก
     } catch (err) {
       alert("เกิดข้อผิดพลาดในการบันทึก: " + err.message);
     }
@@ -957,6 +959,8 @@ ${content}`;
         ...chapter,
         title: title.trim(),
         content: content,
+        novelTitle: chapter.novelTitle || "",
+        coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
       onSaveAndNext(payload);
