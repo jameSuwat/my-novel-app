@@ -726,7 +726,7 @@ ${para}`;
         const data = await response.json();
         if (data.error) {
           if (data.error.code === 429) {
-            await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
+            await new Promise((resolve) => setTimeout(resolve, 2500 * (attempt + 1)));
             continue;
           }
           throw new Error(data.error.message);
@@ -736,7 +736,7 @@ ${para}`;
         return aiFixed ? aiFixed.trim() : para;
       } catch (err) {
         if (attempt === retries - 1) return para;
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
     return para;
@@ -908,6 +908,17 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
+  // 🟢 ฟังก์ชันบังคับบันทึกข้อมูลทันที พร้อมแจ้งเตือน
+  const triggerSave = () => {
+    try {
+      onSave({ ...chapter, title: title.trim(), content });
+      setTypoNotice("💾 บันทึกข้อมูลลงระบบเรียบร้อยแล้ว!");
+      setTimeout(() => setTypoNotice(""), 3000);
+    } catch (err) {
+      alert("เกิดข้อผิดพลาดในการบันทึก: " + err.message);
+    }
+  };
+
   const charCountTotal = content ? content.length : 0;
   const charCountNoSpaces = content ? content.replace(/\s+/g, "").length : 0;
   const keyCount = getActiveKeyList().length;
@@ -942,10 +953,9 @@ ${content}`;
               <Trash2 size={16} />
             </button>
           )}
+          {/* 🟢 ปุ่มบันทึกหลัก */}
           <button
-            onClick={() => {
-              onSave({ ...chapter, title: title.trim(), content });
-            }}
+            onClick={triggerSave}
             style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
           >
             บันทึก
