@@ -536,7 +536,7 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
   );
 }
 
-const FONT_MIN = 13;
+const FONT_MIN = 14;
 const FONT_MAX = 28;
 const FONT_SIZE_KEY = "novel-writer-font-size-v2";
 const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys-v2";
