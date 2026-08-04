@@ -64,7 +64,7 @@ export default function NovelLibraryApp() {
   const [novels, setNovels] = useState(loadNovels);
   const [currentId, setCurrentId] = useState(null);
   const [query, setQuery] = useState("");
-  const [editingNovelInfo, setEditingNovelInfo] = useState(null); // "new" | novel object | null
+  const [editingNovelInfo, setEditingNovelInfo] = useState(null); 
   const [openChapter, setOpenChapter] = useState(null);
   const [isNewChapter, setIsNewChapter] = useState(false);
   const fileInputRef = useRef(null);
@@ -76,6 +76,15 @@ export default function NovelLibraryApp() {
       console.error("บันทึกข้อมูลลง localStorage ไม่สำเร็จ", e);
     }
   }, [novels]);
+
+  // 🟢 ฟังก์ชันบังคับเซฟลงเครื่องทันที (Manual Save)
+  const forceSaveToLocal = () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(novels));
+    } catch (e) {
+      console.error("บังคับบันทึกข้อมูลล้มเหลว", e);
+    }
+  };
 
   const current = novels.find((n) => n.id === currentId) || null;
 
@@ -176,6 +185,7 @@ export default function NovelLibraryApp() {
             setIsNewChapter(isNew);
           }}
           onAddChapter={addChapter}
+          onForceSave={forceSaveToLocal} // 🟢 ส่งฟังก์ชันไปให้ปุ่มหน้าหลัก
         />
       )}
 
@@ -285,8 +295,9 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
   );
 }
 
-function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter }) {
+function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave }) {
   const sorted = useMemo(() => [...novel.chapters].sort((a, b) => a.order - b.order), [novel.chapters]);
+  const [savedAlert, setSavedAlert] = useState(false); // 🟢 สถานะการกดเซฟหน้าหลัก
 
   function handleCoverPick(e) {
     const file = e.target.files?.[0];
@@ -296,14 +307,42 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
     reader.readAsDataURL(file);
   }
 
+  // 🟢 ฟังก์ชันเวลากดปุ่มเซฟ
+  const handleManualSave = () => {
+    if (onForceSave) onForceSave();
+    setSavedAlert(true);
+    setTimeout(() => setSavedAlert(false), 2000); // คืนค่าปุ่มหลัง 2 วิ
+  };
+
   return (
     <div>
-      <button
-        onClick={onBack}
-        style={{ position: "sticky", top: 0, zIndex: 10, display: "flex", alignItems: "center", gap: 6, background: "#12161dee", backdropFilter: "blur(6px)", border: "none", color: "#c9a15a", padding: "16px 18px", fontSize: 14, cursor: "pointer", width: "100%" }}
-      >
-        <ChevronLeft size={18} /> หิ้งนิยาย
-      </button>
+      {/* 🟢 อัปเดต Header หน้าหลัก เพิ่มปุ่มเซฟ */}
+      <div style={{ position: "sticky", top: 0, zIndex: 10, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#12161dee", backdropFilter: "blur(6px)", width: "100%" }}>
+        <button
+          onClick={onBack}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", color: "#c9a15a", padding: "16px 18px", fontSize: 14, cursor: "pointer" }}
+        >
+          <ChevronLeft size={18} /> หิ้งนิยาย
+        </button>
+
+        <button
+          onClick={handleManualSave}
+          style={{
+            background: savedAlert ? "#2e5b1e" : "#1b212b",
+            border: `1px solid ${savedAlert ? "#b2d8a0" : "#2a3140"}`,
+            color: savedAlert ? "#e2f0d9" : "#c9a15a",
+            borderRadius: 8,
+            padding: "6px 14px",
+            marginRight: 18,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            transition: "all 0.2s"
+          }}
+        >
+          {savedAlert ? "✓ บันทึกแล้ว" : "💾 บันทึก"}
+        </button>
+      </div>
 
       <div style={{ position: "relative" }}>
         <div
@@ -514,6 +553,11 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [apiKeysInput, setApiKeysInput] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
   const [showKeyInput, setShowKeyInput] = useState(false);
 
+  // 🟢 State สำหรับฟีเจอร์เปลี่ยนสรรพนาม (ค้นหาและแทนที่)
+  const [showReplace, setShowReplace] = useState(false);
+  const [searchWord, setSearchWord] = useState("");
+  const [replaceWord, setReplaceWord] = useState("");
+
   const [fontSize, setFontSize] = useState(() => {
     try {
       const saved = localStorage.getItem(FONT_SIZE_KEY);
@@ -539,10 +583,8 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     if (contentRef.current) {
       const scrollContainer = contentRef.current.parentElement.parentElement;
       const currentScroll = scrollContainer.scrollTop;
-
       contentRef.current.style.height = "auto";
       contentRef.current.style.height = contentRef.current.scrollHeight + "px";
-
       scrollContainer.scrollTop = currentScroll;
     }
   }, [content, fontSize]);
@@ -566,17 +608,11 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       e.preventDefault();
       const { selectionStart, selectionEnd } = e.target;
       const indent = "\n\n    ";
-      const newContent =
-        content.substring(0, selectionStart) +
-        indent +
-        content.substring(selectionEnd);
-
+      const newContent = content.substring(0, selectionStart) + indent + content.substring(selectionEnd);
       setContent(newContent);
-
       setTimeout(() => {
         if (contentRef.current) {
-          contentRef.current.selectionStart = contentRef.current.selectionEnd =
-            selectionStart + indent.length;
+          contentRef.current.selectionStart = contentRef.current.selectionEnd = selectionStart + indent.length;
         }
       }, 0);
     }
@@ -589,18 +625,37 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getActiveKeyList = () => {
-    const raw = apiKeysInput || localStorage.getItem(GEMINI_KEY_STORAGE) || "";
-    return raw
-      .split(/[\n,]+/)
-      .map((k) => k.trim())
-      .filter((k) => k.length > 0);
+  // 🟢 ฟังก์ชันเปลี่ยนสรรพนาม / ค้นหาและแทนที่คำ
+  const handleReplaceWords = (e) => {
+    e.preventDefault();
+    if (!searchWord) return;
+    
+    // สร้าง Regex เพื่อแทนที่ทุกคำที่ตรงกัน
+    const regex = new RegExp(searchWord, "g");
+    const matchCount = (content.match(regex) || []).length;
+    
+    if (matchCount === 0) {
+      setTypoNotice(`ไม่พบคำว่า "${searchWord}" ในเนื้อหาครับ`);
+      setTimeout(() => setTypoNotice(""), 3000);
+      return;
+    }
+
+    const newContent = content.replace(regex, replaceWord);
+    setContent(newContent);
+    setTypoNotice(`✨ เปลี่ยน "${searchWord}" เป็น "${replaceWord}" สำเร็จทั้งหมด ${matchCount} จุด!`);
+    setShowReplace(false);
+    setSearchWord("");
+    setReplaceWord("");
+    setTimeout(() => setTypoNotice(""), 4000);
   };
 
-  // 🟢 ฟังก์ชันส่งพร้อมระบบ Auto-Retry และหน่วงเวลาป้องกันชน Rate Limit
+  const getActiveKeyList = () => {
+    const raw = apiKeysInput || localStorage.getItem(GEMINI_KEY_STORAGE) || "";
+    return raw.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length > 0);
+  };
+
   const fetchWithRetry = async (para, key, retries = 3, delay = 2000) => {
     if (!para.trim()) return para;
-
     const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทย หน้าที่ของคุณคือ:
 1. เติมเครื่องหมายคำพูด "..." ครอบบทสนทนาหรือคำพูดตัวละครที่ยังไม่มีให้อย่างถูกต้อง
 2. แก้ไขคำพิมพ์ผิด ตัวการันต์ สระเอซ้ำ (เเ -> แ) และเว้นวรรคไม้ยมก (ๆ)
@@ -617,22 +672,17 @@ ${para}`;
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptText }] }]
-            })
+            body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] })
           }
         );
-
         const data = await response.json();
         if (data.error) {
-          // ถ้าติด Quota ให้รอแล้วลองใหม่
           if (data.error.code === 429 && attempt < retries - 1) {
             await new Promise((resolve) => setTimeout(resolve, delay * (attempt + 1)));
             continue;
           }
           throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
         }
-
         const aiFixed = data.candidates?.[0]?.content?.parts?.[0]?.text;
         return aiFixed ? aiFixed.trim() : para;
       } catch (err) {
@@ -648,9 +698,7 @@ ${para}`;
       alert("กรุณาใส่เนื้อหานิยายก่อนกดตรวจครับ");
       return;
     }
-
     let keyList = getActiveKeyList();
-
     if (keyList.length === 0) {
       const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ\n(หากมีหลายคีย์ ให้คั่นด้วยเครื่องหมายจุลภาค , หรือขึ้นบรรทัดใหม่):");
       if (!input) return;
@@ -669,7 +717,6 @@ ${para}`;
       const fixedParagraphs = new Array(total);
       let completedCount = 0;
 
-      // ส่งทีละกลุ่มย่อยแบบควบคุมความเร็ว ไม่ให้ยิงชนโควตา
       for (let i = 0; i < total; i++) {
         const para = paragraphs[i];
         const currentKey = keyList[i % keyList.length];
@@ -683,8 +730,7 @@ ${para}`;
         try {
           fixedParagraphs[i] = await fetchWithRetry(para, currentKey);
         } catch (err) {
-          console.error(`Paragraph ${i} error:`, err);
-          fixedParagraphs[i] = para; // ใช้ข้อความเดิมถ้าพยายามจนหมดสิทธิ์
+          fixedParagraphs[i] = para;
         }
 
         completedCount++;
@@ -692,12 +738,8 @@ ${para}`;
         setProgress(currentPercent);
         setTypoNotice(`🤖 กำลังตรวจทาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
 
-        // หน่วงเวลาเล็กน้อยระหว่างแต่ละย่อหน้า เพื่อป้องกันโควตาเต็ม
-        if (i < total - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 300));
-        }
+        if (i < total - 1) await new Promise((resolve) => setTimeout(resolve, 300));
       }
-
       setContent(fixedParagraphs.join("\n\n"));
       setTypoNotice(`✨ ตรวจสอบเรียบร้อยสมบูรณ์แล้ว!`);
     } catch (err) {
@@ -724,26 +766,12 @@ ${para}`;
   return (
     <div style={{ position: "fixed", inset: 0, background: "#f4ede0", zIndex: 50, display: "flex", flexDirection: "column" }}>
       {/* Toolbar */}
-      <div
-        style={{
-          flexShrink: 0,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "14px 16px",
-          background: "#1a202a",
-          borderBottom: "1px solid #2a3140",
-        }}
-      >
+      <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", background: "#1a202a", borderBottom: "1px solid #2a3140" }}>
         <button onClick={onCancel} style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
           <ChevronLeft size={18} /> ปิด
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            onClick={() => setShowKeyInput(!showKeyInput)}
-            title="ตั้งค่า Gemini API Keys"
-            style={{ background: "none", border: "1px solid #3a4454", color: "#c9a15a", cursor: "pointer", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}
-          >
+          <button onClick={() => setShowKeyInput(!showKeyInput)} title="ตั้งค่า Gemini API Keys" style={{ background: "none", border: "1px solid #3a4454", color: "#c9a15a", cursor: "pointer", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}>
             🔑 {keyCount > 0 ? `${keyCount} API Keys` : "API Key"}
           </button>
           {onDelete && (
@@ -751,10 +779,7 @@ ${para}`;
               <Trash2 size={16} />
             </button>
           )}
-          <button
-            onClick={() => onSave({ ...chapter, title: title.trim(), content })}
-            style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
-          >
+          <button onClick={() => onSave({ ...chapter, title: title.trim(), content })} style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}>
             บันทึก
           </button>
         </div>
@@ -762,138 +787,64 @@ ${para}`;
 
       {showKeyInput && (
         <form onSubmit={handleSaveKeys} style={{ background: "#2a3140", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-          <label style={{ fontSize: 12, color: "#c9a15a" }}>
-            🔑 วาง Gemini API Keys หลายๆ คีย์ (แยกด้วยบรรทัดใหม่ หรือเครื่องหมาย , )
-          </label>
-          <textarea
-            rows={3}
-            placeholder={`AIzaSyA1...\nAIzaSyB2...\nAIzaSyC3...`}
-            value={apiKeysInput}
-            onChange={(e) => setApiKeysInput(e.target.value)}
-            style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12, fontFamily: "monospace" }}
-          />
+          <label style={{ fontSize: 12, color: "#c9a15a" }}>🔑 วาง Gemini API Keys (แยกด้วยบรรทัดใหม่ หรือ , )</label>
+          <textarea rows={3} placeholder={`AIzaSyA1...\nAIzaSyB2...`} value={apiKeysInput} onChange={(e) => setApiKeysInput(e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12, fontFamily: "monospace" }} />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "#9099a8" }}>ตรวจพบทั้งหมด {keyCount} คีย์</span>
-            <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
-              บันทึกคีย์ทั้งหมด
-            </button>
+            <span style={{ fontSize: 11, color: "#9099a8" }}>พบ {keyCount} คีย์</span>
+            <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>บันทึกคีย์ทั้งหมด</button>
           </div>
         </form>
       )}
 
       {/* Sub-bar */}
-      <div
-        style={{
-          flexShrink: 0,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "10px 16px",
-          background: "#efe6d3",
-          borderBottom: "1px solid #ddd0b3",
-        }}
-      >
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#8a7c5e" }}>
-          ตอนที่ {chapter.order}
-        </span>
+      <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", background: "#efe6d3", borderBottom: "1px solid #ddd0b3" }}>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#8a7c5e" }}>ตอนที่ {chapter.order}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button
-            onClick={() => setFontSize((s) => Math.max(FONT_MIN, s - 1))}
-            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
-          >
-            ก-
-          </button>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", width: 30, textAlign: "center" }}>
-            {fontSize}
-          </span>
-          <button
-            onClick={() => setFontSize((s) => Math.min(FONT_MAX, s + 1))}
-            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 15, fontWeight: 700 }}
-          >
-            ก+
-          </button>
+          <button onClick={() => setFontSize((s) => Math.max(FONT_MIN, s - 1))} style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>ก-</button>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", width: 30, textAlign: "center" }}>{fontSize}</span>
+          <button onClick={() => setFontSize((s) => Math.min(FONT_MAX, s + 1))} style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 15, fontWeight: 700 }}>ก+</button>
         </div>
       </div>
 
       {/* Writing area */}
       <div style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
         <div style={{ padding: "20px 18px 60px" }}>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="ชื่อตอน (ไม่บังคับ)"
-            style={{
-              width: "100%",
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              fontFamily: "'Noto Serif Thai', serif",
-              fontSize: fontSize + 4,
-              fontWeight: 700,
-              marginBottom: 14,
-              color: "#221d14",
-            }}
-          />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="ชื่อตอน (ไม่บังคับ)" style={{ width: "100%", border: "none", outline: "none", background: "transparent", fontFamily: "'Noto Serif Thai', serif", fontSize: fontSize + 4, fontWeight: 700, marginBottom: 14, color: "#221d14" }} />
 
           {/* โซนปุ่มเครื่องมือ */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-            <span style={{ fontSize: 12, color: "#8a7c5e" }}>
-              💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
-            </span>
+            <span style={{ fontSize: 12, color: "#8a7c5e" }}>💡 กด Enter ขึ้นย่อหน้าอัตโนมัติ</span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <button
-                onClick={handleGeminiProofread}
-                disabled={isAiProcessing}
-                style={{
-                  background: isAiProcessing ? "#d0c3a5" : "#1a202a",
-                  border: "1px solid #c9a15a",
-                  color: "#c9a15a",
-                  borderRadius: 6,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: isAiProcessing ? "wait" : "pointer",
-                  fontWeight: 600
-                }}
-              >
+              
+              {/* 🟢 ปุ่มเปิดเมนูเปลี่ยนสรรพนาม */}
+              <button onClick={() => setShowReplace(!showReplace)} style={{ background: showReplace ? "#d0c3a5" : "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+                🔄 เปลี่ยนสรรพนาม
+              </button>
+
+              <button onClick={handleGeminiProofread} disabled={isAiProcessing} style={{ background: isAiProcessing ? "#d0c3a5" : "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: isAiProcessing ? "wait" : "pointer", fontWeight: 600 }}>
                 {isAiProcessing ? `⏳ (${progress}%)` : `🤖 AI ตรวจสลับคีย์ (${keyCount})`}
               </button>
-
-              <button
-                onClick={handleCopyContent}
-                style={{
-                  background: copied ? "#d4edda" : "#efe6d3",
-                  border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"),
-                  color: copied ? "#155724" : "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  transition: "all 0.2s"
-                }}
-              >
+              <button onClick={handleCopyContent} style={{ background: copied ? "#d4edda" : "#efe6d3", border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"), color: copied ? "#155724" : "#4a3f2a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600, transition: "all 0.2s" }}>
                 {copied ? "✓ คัดลอกแล้ว!" : "📋 คัดลอกเนื้อหา"}
               </button>
-
-              <button
-                onClick={handleAutoIndent}
-                style={{
-                  background: "#efe6d3",
-                  border: "1px solid #cabb98",
-                  color: "#4a3f2a",
-                  borderRadius: 6,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600
-                }}
-              >
+              <button onClick={handleAutoIndent} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
                 ✨ จัดย่อหน้าทั้งหมด
               </button>
             </div>
           </div>
 
-          {/* แถบ Progress Bar */}
+          {/* 🟢 กล่องค้นหาและแทนที่คำ */}
+          {showReplace && (
+            <form onSubmit={handleReplaceWords} style={{ background: "#e8dfcc", padding: "10px", borderRadius: 6, marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input type="text" placeholder="คำเดิม (เช่น ชั้น)" value={searchWord} onChange={(e) => setSearchWord(e.target.value)} required style={{ flex: 1, padding: "6px 10px", borderRadius: 4, border: "1px solid #cabb98", fontSize: 13, outline: "none" }} />
+              <span style={{ color: "#8a7c5e" }}>➡️</span>
+              <input type="text" placeholder="คำใหม่ (เช่น ฉัน)" value={replaceWord} onChange={(e) => setReplaceWord(e.target.value)} style={{ flex: 1, padding: "6px 10px", borderRadius: 4, border: "1px solid #cabb98", fontSize: 13, outline: "none" }} />
+              <button type="submit" style={{ background: "#c9a15a", color: "#1a140a", border: "none", padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
+                แทนที่ทั้งหมด
+              </button>
+            </form>
+          )}
+
           {isAiProcessing && (
             <div style={{ marginBottom: 12, background: "#efe6d3", borderRadius: 8, padding: 8, border: "1px solid #ddd0b3" }}>
               <div style={{ fontSize: 12, color: "#4a3f2a", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
@@ -901,14 +852,7 @@ ${para}`;
                 <span style={{ fontWeight: 700 }}>{progress}%</span>
               </div>
               <div style={{ width: "100%", height: 8, background: "#d0c3a5", borderRadius: 4, overflow: "hidden" }}>
-                <div
-                  style={{
-                    width: `${progress}%`,
-                    height: "100%",
-                    background: "#c9a15a",
-                    transition: "width 0.3s ease"
-                  }}
-                />
+                <div style={{ width: `${progress}%`, height: "100%", background: "#c9a15a", transition: "width 0.3s ease" }} />
               </div>
             </div>
           )}
@@ -919,25 +863,7 @@ ${para}`;
             </div>
           )}
 
-          <textarea
-            ref={contentRef}
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="เริ่มเขียนตอนนี้..."
-            style={{
-              width: "100%",
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              resize: "none",
-              fontSize: fontSize,
-              lineHeight: 1.75,
-              letterSpacing: "0.2px",
-              color: "#2a2318",
-              minHeight: "60vh",
-            }}
-          />
+          <textarea ref={contentRef} value={content} onChange={(e) => setContent(e.target.value)} onKeyDown={handleKeyDown} placeholder="เริ่มเขียนตอนนี้..." style={{ width: "100%", border: "none", outline: "none", background: "transparent", resize: "none", fontSize: fontSize, lineHeight: 1.75, letterSpacing: "0.2px", color: "#2a2318", minHeight: "60vh" }} />
 
           <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
             <span>📝 {wordCount(content)} คำ</span>
@@ -947,25 +873,7 @@ ${para}`;
             <span>(ไม่รวมเว้นวรรค: {charCountNoSpaces})</span>
           </div>
 
-          <button
-            onClick={() => onSaveAndNext({ ...chapter, title: title.trim(), content })}
-            style={{
-              width: "100%",
-              marginTop: 22,
-              background: "#1a202a",
-              border: "1px solid #c9a15a",
-              color: "#c9a15a",
-              fontWeight: 600,
-              fontSize: 14.5,
-              padding: "13px",
-              borderRadius: 10,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-            }}
-          >
+          <button onClick={() => onSaveAndNext({ ...chapter, title: title.trim(), content })} style={{ width: "100%", marginTop: 22, background: "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", fontWeight: 600, fontSize: 14.5, padding: "13px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
             บันทึกและสร้างตอนถัดไป <ArrowRight size={16} />
           </button>
         </div>
