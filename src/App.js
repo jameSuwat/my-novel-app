@@ -935,6 +935,7 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
+  // 🟢 ฟังก์ชันบันทึกที่แก้ไขปัญหาเซฟเรื่องอื่นๆ ไม่ติดอย่างเด็ดขาด
   const triggerSave = () => {
     try {
       const payload = {
@@ -1083,13 +1084,12 @@ ${content}`;
             }}
           />
 
-          {/* โซนปุ่มเครื่องมือ (ปรับให้รองรับหน้าจอมือถือ) */}
+          {/* โซนปุ่มเครื่องมือ */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
             <span style={{ fontSize: 12, color: "#8a7c5e" }}>
               💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
             </span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
-              
               <button
                 onClick={() => setShowFindReplace(!showFindReplace)}
                 style={{
@@ -1197,7 +1197,7 @@ ${content}`;
             </div>
           </div>
 
-          {/* แถบ ค้นหา/แทนที่ (ปรับให้สวยงามบนมือถือ) */}
+          {/* แถบ ค้นหา/แทนที่ */}
           {showFindReplace && (
             <div style={{ display: "flex", gap: 8, marginBottom: 12, background: "#efe6d3", padding: "12px", borderRadius: 8, border: "1px solid #ddd0b3", flexDirection: "column" }}>
               <div style={{ display: "flex", gap: 8, width: "100%" }}>
