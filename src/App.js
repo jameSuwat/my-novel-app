@@ -576,7 +576,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   useEffect(() => {
     setTitle(chapter.title || "");
     setContent(chapter.content || "");
-  }, [chapter.id, chapter.order]);
+  }, [chapter.id, chapter.order, chapter.title, chapter.content]);
 
   useEffect(() => {
     if (contentRef.current) {
@@ -908,7 +908,6 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
-  // 🟢 ฟังก์ชันบันทึกที่รองรับทุกเรื่องและทุกตอนอย่างแม่นยำ
   const triggerSave = () => {
     try {
       const payload = {
@@ -973,7 +972,6 @@ ${content}`;
               <Trash2 size={16} />
             </button>
           )}
-          {/* 🟢 ปุ่มบันทึกหลัก */}
           <button
             onClick={triggerSave}
             style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
