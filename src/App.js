@@ -942,8 +942,6 @@ ${content}`;
         ...chapter,
         title: title.trim(),
         content: content,
-        novelTitle: chapter.novelTitle || title.trim(),
-        coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
       onSave(payload);
@@ -959,8 +957,6 @@ ${content}`;
         ...chapter,
         title: title.trim(),
         content: content,
-        novelTitle: chapter.novelTitle || title.trim(),
-        coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
       onSaveAndNext(payload);
