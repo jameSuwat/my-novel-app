@@ -935,12 +935,15 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
+  // 🟢 ฟังก์ชันบันทึกที่รักษารูปภาพ ชื่อเรื่อง และข้อมูลตอนให้อย่างครบถ้วนสมบูรณ์
   const triggerSave = () => {
     try {
       const payload = {
         ...chapter,
         title: title.trim(),
         content: content,
+        novelTitle: chapter.novelTitle || "",
+        coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
       onSave(payload);
@@ -957,6 +960,8 @@ ${content}`;
         ...chapter,
         title: title.trim(),
         content: content,
+        novelTitle: chapter.novelTitle || "",
+        coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
       onSaveAndNext(payload);
