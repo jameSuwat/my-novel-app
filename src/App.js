@@ -15,7 +15,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// 🟢 ฟังก์ชันย่อขนาดรูปภาพอัตโนมัติไม่ให้เกินโควตา Firebase
 function compressImage(base64Str, maxWidth = 300, quality = 0.7) {
   return new Promise((resolve) => {
     if (!base64Str || !base64Str.startsWith("data:image")) {
@@ -72,8 +71,8 @@ const seedNovels = [
     cover: null,
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 3,
     chapters: [
-      { id: "c1", order: 1, title: "", content: "แสงแดดยามเช้าสาดผ่านหน้าต่างบานเก่า อารดายืนนิ่งอยู่หน้าประตูบ้านที่ไม่ได้กลับมาเยือนนานถึงสิบปี...", updatedAt: Date.now() - 1000 * 60 * 60 * 20 },
-      { id: "c2", order: 2, title: "", content: "", updatedAt: Date.now() - 1000 * 60 * 60 * 10 },
+      { id: "c1", order: 1, title: "จุดเริ่มต้น", content: "แสงแดดยามเช้าสาดผ่านหน้าต่างบานเก่า อารดายืนนิ่งอยู่หน้าประตูบ้านที่ไม่ได้กลับมาเยือนนานถึงสิบปี...", updatedAt: Date.now() - 1000 * 60 * 60 * 20 },
+      { id: "c2", order: 2, title: "ความลับ", content: "", updatedAt: Date.now() - 1000 * 60 * 60 * 10 },
     ],
   },
 ];
@@ -497,7 +496,7 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 15.5, fontWeight: 600 }}>
-                  {ch.title ? `ตอนที่ ${ch.order} — ${ch.title}` : `ตอนที่ ${ch.order}`}
+                  {ch.title && ch.title.trim() !== "" ? `ตอนที่ ${ch.order} — ${ch.title}` : `ตอนที่ ${ch.order}`}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 3, fontSize: 11.5, color: "#7d8494" }}>
                   <span style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace" }}>
