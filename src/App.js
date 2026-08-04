@@ -908,14 +908,34 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
-  // 🟢 ฟังก์ชันบังคับบันทึกข้อมูลทันที พร้อมแจ้งเตือน
+  // 🟢 ฟังก์ชันบันทึกที่รองรับทุกเรื่องและทุกตอนอย่างแม่นยำ
   const triggerSave = () => {
     try {
-      onSave({ ...chapter, title: title.trim(), content });
-      setTypoNotice("💾 บันทึกข้อมูลลงระบบเรียบร้อยแล้ว!");
+      const payload = {
+        ...chapter,
+        title: title.trim(),
+        content: content,
+        updatedAt: Date.now()
+      };
+      onSave(payload);
+      setTypoNotice("💾 บันทึกสำเร็จ!");
       setTimeout(() => setTypoNotice(""), 3000);
     } catch (err) {
       alert("เกิดข้อผิดพลาดในการบันทึก: " + err.message);
+    }
+  };
+
+  const triggerSaveAndNext = () => {
+    try {
+      const payload = {
+        ...chapter,
+        title: title.trim(),
+        content: content,
+        updatedAt: Date.now()
+      };
+      onSaveAndNext(payload);
+    } catch (err) {
+      alert("เกิดข้อผิดพลาดในการบันทึกและสร้างตอนถัดไป: " + err.message);
     }
   };
 
@@ -1184,9 +1204,7 @@ ${content}`;
           </div>
 
           <button
-            onClick={() => {
-              onSaveAndNext({ ...chapter, title: title.trim(), content });
-            }}
+            onClick={triggerSaveAndNext}
             style={{
               width: "100%",
               marginTop: 22,
