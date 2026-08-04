@@ -540,7 +540,7 @@ const FONT_MIN = 13;
 const FONT_MAX = 28;
 const FONT_SIZE_KEY = "novel-writer-font-size-v2";
 const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys-v2";
-const GEMINI_MODEL = "gemini-1.5-flash";
+const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [title, setTitle] = useState(chapter.title || "");
@@ -640,6 +640,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       .filter((k) => k.length > 0);
   };
 
+  // 1. ฟีเจอร์ตรวจสอบและใส่เครื่องหมาย "..." ให้บทสนทนาทันที
   const handleFixDialogueQuotes = () => {
     if (!content) return;
 
@@ -697,6 +698,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setTypoNotice(""), 4000);
   };
 
+  // 2 & 3. ระบบส่งข้อมูลแบบสลับคีย์อัตโนมัติ หน่วงเวลา (Delay) และแถบ Progress Bar
   const fetchWithRetry = async (para, keyList, retries = 3) => {
     if (!para.trim()) return para;
 
@@ -726,7 +728,7 @@ ${para}`;
         const data = await response.json();
         if (data.error) {
           if (data.error.code === 429) {
-            await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+            await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
             continue;
           }
           throw new Error(data.error.message);
@@ -736,7 +738,7 @@ ${para}`;
         return aiFixed ? aiFixed.trim() : para;
       } catch (err) {
         if (attempt === retries - 1) return para;
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     }
     return para;
@@ -759,7 +761,7 @@ ${para}`;
 
     setIsAiProcessing(true);
     setProgress(0);
-    setTypoNotice(`🤖 เริ่มต้นตรวจทานด้วย ${keyList.length} API Keys...`);
+    setTypoNotice(`🤖 เริ่มต้นตรวจทานด้วย ${keyList.length} API Keys (${GEMINI_MODEL})...`);
 
     try {
       const paragraphs = content.split("\n\n");
@@ -781,7 +783,8 @@ ${para}`;
         setProgress(currentPercent);
         setTypoNotice(`🤖 กำลังตรวจทาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
 
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        // หน่วงเวลา (Delay) ระหว่างการส่งแต่ละย่อหน้า ป้องกันชน Quota
+        await new Promise((resolve) => setTimeout(resolve, 800));
       }
 
       setContent(fixedParagraphs.join("\n\n"));
@@ -795,7 +798,7 @@ ${para}`;
     }
   };
 
-  // 🟢 แก้ไขฟังก์ชันตรวจสอบสรรพนามให้สุ่มสลับใช้ทุก API Keys ที่มี
+  // 4. ฟีเจอร์ตรวจสอบสรรพนามยุคโบราณและยุคปัจจุบัน พร้อมป๊อปอัพแก้ไข
   const handleCheckPronouns = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนตรวจสอบสรรพนามครับ");
@@ -812,9 +815,9 @@ ${para}`;
     }
 
     setIsAiProcessing(true);
-    setTypoNotice("🔍 AI กำลังสแกนหาสรรพนามยุคปัจจุบัน/ข้ามยุค...");
+    setTypoNotice("🔍 AI กำลังสแกนหาสรรพนาม (ข้า, เจ้า, ฉัน, คุณ, เธอ, ฯลฯ)...");
 
-    const promptText = `คุณคือนักวิเคราะห์วรรณกรรม ตรวจสอบเนื้อหานิยายภาษาไทยด้านล่างนี้ ค้นหาคำสรรพนามที่มักใช้ในยุคปัจจุบัน (เช่น ฉัน, เธอ, คุณ, ผม, นาย, แก, ชั้น, เรา, ค่ะ, คะ, ครับ, จ้า) ที่อาจหลุดมาในนิยายพีเรียดหรือนิยายโบราณ 
+    const promptText = `คุณคือนักวิเคราะห์วรรณกรรม ตรวจสอบเนื้อหานิยายภาษาไทยด้านล่างนี้ ค้นหาคำสรรพนามทั้งหมดที่ใช้ เช่น ข้า, เจ้า, ฉัน, คุณ, เธอ, นาง, นาย, ท่าน, ขอรับ, ครับ, ค่ะ, คะ และสรรพนามยุคปัจจุบันที่อาจหลุดมาในนิยายโบราณ/พีเรียด
 ให้ส่งผลลัพธ์กลับมาในรูปแบบ JSON Array ของ Object โดยแต่ละ Object ต้องมีโครงสร้างดังนี้:
 [
   { "word": "คำที่พบ", "count": จำนวนครั้งที่พบ, "suggestion": "คำแนะนำเบื้องต้น" }
@@ -844,7 +847,7 @@ ${content}`;
         const data = await response.json();
         if (data.error) {
           if (data.error.code === 429) {
-            await new Promise((resolve) => setTimeout(resolve, 2000));
+            await new Promise((resolve) => setTimeout(resolve, 3000));
             continue;
           }
           throw new Error(data.error.message);
@@ -1200,18 +1203,18 @@ ${content}`;
         </div>
       </div>
 
-      {/* Modal Popup ตรวจสอบสรรพนามข้ามยุค */}
+      {/* Modal Popup ตรวจสอบสรรพนาม */}
       {showPronounModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div style={{ background: "#f4ede0", borderRadius: 12, width: "100%", maxWidth: 500, padding: 20, border: "1px solid #cabb98", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
-            <h3 style={{ margin: "0 0 10px 0", color: "#221d14", fontSize: 18 }}>👥 ตรวจพบคำสรรพนามยุคปัจจุบัน</h3>
+            <h3 style={{ margin: "0 0 10px 0", color: "#221d14", fontSize: 18 }}>👥 ตรวจพบคำสรรพนามในเนื้อหา</h3>
             <p style={{ fontSize: 13, color: "#6a5c40", margin: "0 0 14px 0" }}>
-              ตรวจสอบพบคำสรรพนามที่อาจไม่เข้ากับบริบทนิยายโบราณ/พีเรียด คุณสามารถพิมพ์คำที่ต้องการเปลี่ยนแทนที่ลงในช่องขวาได้เลยครับ:
+              ตรวจสอบพบคำสรรพนาม (รวมถึงคำที่อาจหลุดมาจากยุคปัจจุบัน) สามารถพิมพ์คำที่ต้องการเปลี่ยนแทนที่ลงในช่องขวาได้เลยครับ:
             </p>
 
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
               {pronounResults.length === 0 ? (
-                <div style={{ textAlign: "center", padding: 20, color: "#6a5c40" }}>ยอดเยี่ยม! ไม่พบคำสรรพนามยุคปัจจุบันในตอนนี้</div>
+                <div style={{ textAlign: "center", padding: 20, color: "#6a5c40" }}>ไม่พบคำสรรพนามในตอนนี้</div>
               ) : (
                 pronounResults.map((item, idx) => (
                   <div key={idx} style={{ background: "#efe6d3", padding: "10px 12px", borderRadius: 8, border: "1px solid #ddd0b3", display: "flex", alignItems: "center", gap: 10 }}>
