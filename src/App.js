@@ -935,20 +935,19 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
-  // 🟢 ฟังก์ชันบันทึกที่รักษารูปภาพ ชื่อเรื่อง และข้อมูลตอนให้อย่างครบถ้วนสมบูรณ์
+  // 🟢 กดบันทึกปุ๊บ เซฟข้อมูลครบถ้วน และเด้งออกหน้าแรกทันที
   const triggerSave = () => {
     try {
       const payload = {
         ...chapter,
         title: title.trim(),
         content: content,
-        novelTitle: chapter.novelTitle || "",
+        novelTitle: chapter.novelTitle || title.trim(),
         coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
       onSave(payload);
-      setTypoNotice("💾 บันทึกสำเร็จ!");
-      setTimeout(() => setTypoNotice(""), 3000);
+      onCancel(); // เด้งกลับหน้าแรกทันที
     } catch (err) {
       alert("เกิดข้อผิดพลาดในการบันทึก: " + err.message);
     }
@@ -960,7 +959,7 @@ ${content}`;
         ...chapter,
         title: title.trim(),
         content: content,
-        novelTitle: chapter.novelTitle || "",
+        novelTitle: chapter.novelTitle || title.trim(),
         coverImage: chapter.coverImage || "",
         updatedAt: Date.now()
       };
