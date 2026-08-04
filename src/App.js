@@ -550,13 +550,14 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
 
+  // API Keys State
   const [apiKeysInput, setApiKeysInput] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
   const [showKeyInput, setShowKeyInput] = useState(false);
 
-  // 🟢 State สำหรับฟีเจอร์เปลี่ยนสรรพนาม (ค้นหาและแทนที่)
-  const [showReplace, setShowReplace] = useState(false);
-  const [searchWord, setSearchWord] = useState("");
-  const [replaceWord, setReplaceWord] = useState("");
+  // Modal สรรพนามข้ามยุค
+  const [showPronounModal, setShowPronounModal] = useState(false);
+  const [pronounResults, setPronounResults] = useState([]);
+  const [replacementMap, setReplacementMap] = useState({});
 
   const [fontSize, setFontSize] = useState(() => {
     try {
@@ -583,8 +584,10 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     if (contentRef.current) {
       const scrollContainer = contentRef.current.parentElement.parentElement;
       const currentScroll = scrollContainer.scrollTop;
+
       contentRef.current.style.height = "auto";
       contentRef.current.style.height = contentRef.current.scrollHeight + "px";
+
       scrollContainer.scrollTop = currentScroll;
     }
   }, [content, fontSize]);
@@ -608,11 +611,17 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       e.preventDefault();
       const { selectionStart, selectionEnd } = e.target;
       const indent = "\n\n    ";
-      const newContent = content.substring(0, selectionStart) + indent + content.substring(selectionEnd);
+      const newContent =
+        content.substring(0, selectionStart) +
+        indent +
+        content.substring(selectionEnd);
+
       setContent(newContent);
+
       setTimeout(() => {
         if (contentRef.current) {
-          contentRef.current.selectionStart = contentRef.current.selectionEnd = selectionStart + indent.length;
+          contentRef.current.selectionStart = contentRef.current.selectionEnd =
+            selectionStart + indent.length;
         }
       }, 0);
     }
@@ -625,37 +634,75 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // 🟢 ฟังก์ชันเปลี่ยนสรรพนาม / ค้นหาและแทนที่คำ
-  const handleReplaceWords = (e) => {
-    e.preventDefault();
-    if (!searchWord) return;
-    
-    // สร้าง Regex เพื่อแทนที่ทุกคำที่ตรงกัน
-    const regex = new RegExp(searchWord, "g");
-    const matchCount = (content.match(regex) || []).length;
-    
-    if (matchCount === 0) {
-      setTypoNotice(`ไม่พบคำว่า "${searchWord}" ในเนื้อหาครับ`);
-      setTimeout(() => setTypoNotice(""), 3000);
-      return;
-    }
-
-    const newContent = content.replace(regex, replaceWord);
-    setContent(newContent);
-    setTypoNotice(`✨ เปลี่ยน "${searchWord}" เป็น "${replaceWord}" สำเร็จทั้งหมด ${matchCount} จุด!`);
-    setShowReplace(false);
-    setSearchWord("");
-    setReplaceWord("");
-    setTimeout(() => setTypoNotice(""), 4000);
-  };
-
   const getActiveKeyList = () => {
     const raw = apiKeysInput || localStorage.getItem(GEMINI_KEY_STORAGE) || "";
-    return raw.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length > 0);
+    return raw
+      .split(/[\n,]+/)
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
+  };
+
+  // 🟢 💬 ฟังก์ชันตรวจสอบและใส่เครื่องหมาย "..." ทันที (รองรับทั้งไฮไลต์คลุมดำ หรือสแกนคำพูดพูดว่า/ถามว่า)
+  const handleFixDialogueQuotes = () => {
+    if (!content) return;
+
+    if (contentRef.current) {
+      const { selectionStart, selectionEnd } = contentRef.current;
+      if (selectionStart !== selectionEnd) {
+        const selectedText = content.substring(selectionStart, selectionEnd);
+        const wrapped = (selectedText.startsWith('"') && selectedText.endsWith('"'))
+          ? selectedText.slice(1, -1)
+          : `"${selectedText}"`;
+        const newContent = content.substring(0, selectionStart) + wrapped + content.substring(selectionEnd);
+        setContent(newContent);
+        setTypoNotice('✨ ใส่เครื่องหมาย "..." ครอบข้อความที่เลือกเรียบร้อย!');
+        setTimeout(() => setTypoNotice(""), 3000);
+        return;
+      }
+    }
+
+    let fixed = content;
+    let fixesCount = 0;
+
+    const quoteStandardized = fixed.replace(/[“”「」]/g, '"').replace(/[‘’]/g, "'");
+    if (quoteStandardized !== fixed) {
+      fixesCount++;
+      fixed = quoteStandardized;
+    }
+
+    const dialogueVerbRegex = /(พูดว่า|ถามว่า|ตอบว่า|บอกว่า|ตะโกนว่า|กระซิบว่า|อุทานว่า|พึมพำว่า|กระเซ้าว่า|แย้งว่า)\s*([^"\n\r]+)/g;
+    const newFixed = fixed.replace(dialogueVerbRegex, (match, verb, speech) => {
+      const trimmedSpeech = speech.trim();
+      if (!trimmedSpeech || trimmedSpeech.startsWith('"')) return match;
+      fixesCount++;
+      return `${verb} "${trimmedSpeech}"`;
+    });
+    fixed = newFixed;
+
+    const lines = fixed.split("\n");
+    const fixedLines = lines.map(line => {
+      const quoteCount = (line.match(/"/g) || []).length;
+      if (quoteCount % 2 !== 0) {
+        fixesCount++;
+        return line.trimEnd() + '"';
+      }
+      return line;
+    });
+    fixed = fixedLines.join("\n");
+
+    setContent(fixed);
+
+    if (fixesCount > 0) {
+      setTypoNotice(`✨ เติม/จัดระเบียบเครื่องหมายคำพูด "..." ให้แล้ว ${fixesCount} จุด!`);
+    } else {
+      setTypoNotice('✓ ไม่พบคำพูดที่ขาดเครื่องหมาย (หรือลองคลุมดำข้อความแล้วกดปุ่มนี้เพื่อใส่ "..." ได้ครับ)');
+    }
+    setTimeout(() => setTypoNotice(""), 4000);
   };
 
   const fetchWithRetry = async (para, key, retries = 3, delay = 2000) => {
     if (!para.trim()) return para;
+
     const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทย หน้าที่ของคุณคือ:
 1. เติมเครื่องหมายคำพูด "..." ครอบบทสนทนาหรือคำพูดตัวละครที่ยังไม่มีให้อย่างถูกต้อง
 2. แก้ไขคำพิมพ์ผิด ตัวการันต์ สระเอซ้ำ (เเ -> แ) และเว้นวรรคไม้ยมก (ๆ)
@@ -672,9 +719,12 @@ ${para}`;
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] })
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: promptText }] }]
+            })
           }
         );
+
         const data = await response.json();
         if (data.error) {
           if (data.error.code === 429 && attempt < retries - 1) {
@@ -683,6 +733,7 @@ ${para}`;
           }
           throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
         }
+
         const aiFixed = data.candidates?.[0]?.content?.parts?.[0]?.text;
         return aiFixed ? aiFixed.trim() : para;
       } catch (err) {
@@ -698,7 +749,9 @@ ${para}`;
       alert("กรุณาใส่เนื้อหานิยายก่อนกดตรวจครับ");
       return;
     }
+
     let keyList = getActiveKeyList();
+
     if (keyList.length === 0) {
       const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ\n(หากมีหลายคีย์ ให้คั่นด้วยเครื่องหมายจุลภาค , หรือขึ้นบรรทัดใหม่):");
       if (!input) return;
@@ -730,6 +783,7 @@ ${para}`;
         try {
           fixedParagraphs[i] = await fetchWithRetry(para, currentKey);
         } catch (err) {
+          console.error(`Paragraph ${i} error:`, err);
           fixedParagraphs[i] = para;
         }
 
@@ -738,8 +792,11 @@ ${para}`;
         setProgress(currentPercent);
         setTypoNotice(`🤖 กำลังตรวจทาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
 
-        if (i < total - 1) await new Promise((resolve) => setTimeout(resolve, 300));
+        if (i < total - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
       }
+
       setContent(fixedParagraphs.join("\n\n"));
       setTypoNotice(`✨ ตรวจสอบเรียบร้อยสมบูรณ์แล้ว!`);
     } catch (err) {
@@ -749,6 +806,89 @@ ${para}`;
       setIsAiProcessing(false);
       setTimeout(() => setTypoNotice(""), 4000);
     }
+  };
+
+  const handleCheckPronouns = async () => {
+    if (!content.trim()) {
+      alert("กรุณาใส่เนื้อหานิยายก่อนตรวจสอบสรรพนามครับ");
+      return;
+    }
+
+    let keyList = getActiveKeyList();
+    if (keyList.length === 0) {
+      const input = prompt("🔑 กรุณาใส่ Gemini API Key ก่อนใช้งานตรวจสอบสรรพนาม:");
+      if (!input) return;
+      setApiKeysInput(input);
+      localStorage.setItem(GEMINI_KEY_STORAGE, input);
+      keyList = input.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length > 0);
+    }
+
+    setIsAiProcessing(true);
+    setTypoNotice("🔍 AI กำลังสแกนหาสรรพนามยุคปัจจุบัน/ข้ามยุค...");
+
+    try {
+      const promptText = `คุณคือนักวิเคราะห์วรรณกรรม ตรวจสอบเนื้อหานิยายภาษาไทยด้านล่างนี้ ค้นหาคำสรรพนามที่มักใช้ในยุคปัจจุบัน (เช่น ฉัน, เธอ, คุณ, ผม, นาย, แก, ชั้น, เรา, ค่ะ, คะ, ครับ, จ้า) ที่อาจหลุดมาในนิยายพีเรียดหรือนิยายโบราณ 
+ให้ส่งผลลัพธ์กลับมาในรูปแบบ JSON Array ของ Object โดยแต่ละ Object ต้องมีโครงสร้างดังนี้:
+[
+  { "word": "คำที่พบ", "count": จำนวนครั้งที่พบ, "suggestion": "คำแนะนำเบื้องต้น" }
+]
+*สำคัญมาก*: ตอบกลับเฉพาะ JSON แพลนๆ เท่านั้น ห้ามมีคำอธิบายหรือ Markdown อื่นห่อหุ้ม
+
+เนื้อหา:
+${content}`;
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${keyList[0]}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }]
+          })
+        }
+      );
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+      const cleanJson = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsedResults = JSON.parse(cleanJson);
+
+      setPronounResults(parsedResults);
+      const initialMap = {};
+      parsedResults.forEach(item => { initialMap[item.word] = ""; });
+      setReplacementMap(initialMap);
+      setShowPronounModal(true);
+      setTypoNotice("");
+    } catch (err) {
+      alert("เกิดข้อผิดพลาดในการตรวจสอบสรรพนาม: " + err.message);
+      setTypoNotice("");
+    } finally {
+      setIsAiProcessing(false);
+    }
+  };
+
+  const applyPronounReplacements = () => {
+    let newContent = content;
+    let replacedCount = 0;
+
+    Object.keys(replacementMap).forEach(oldWord => {
+      const newWord = replacementMap[oldWord];
+      if (newWord && newWord.trim() !== "") {
+        const regex = new RegExp(oldWord, "g");
+        const matches = newContent.match(regex);
+        if (matches) {
+          replacedCount += matches.length;
+          newContent = newContent.replace(regex, newWord.trim());
+        }
+      }
+    });
+
+    setContent(newContent);
+    setShowPronounModal(false);
+    setTypoNotice(`✨ เปลี่ยนคำสรรพนามเรียบร้อยแล้วทั้งหมด ${replacedCount} จุด!`);
+    setTimeout(() => setTypoNotice(""), 4000);
   };
 
   const handleSaveKeys = (e) => {
@@ -766,12 +906,26 @@ ${para}`;
   return (
     <div style={{ position: "fixed", inset: 0, background: "#f4ede0", zIndex: 50, display: "flex", flexDirection: "column" }}>
       {/* Toolbar */}
-      <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", background: "#1a202a", borderBottom: "1px solid #2a3140" }}>
+      <div
+        style={{
+          flexShrink: 0,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "14px 16px",
+          background: "#1a202a",
+          borderBottom: "1px solid #2a3140",
+        }}
+      >
         <button onClick={onCancel} style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
           <ChevronLeft size={18} /> ปิด
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={() => setShowKeyInput(!showKeyInput)} title="ตั้งค่า Gemini API Keys" style={{ background: "none", border: "1px solid #3a4454", color: "#c9a15a", cursor: "pointer", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}>
+          <button
+            onClick={() => setShowKeyInput(!showKeyInput)}
+            title="ตั้งค่า Gemini API Keys"
+            style={{ background: "none", border: "1px solid #3a4454", color: "#c9a15a", cursor: "pointer", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}
+          >
             🔑 {keyCount > 0 ? `${keyCount} API Keys` : "API Key"}
           </button>
           {onDelete && (
@@ -779,7 +933,10 @@ ${para}`;
               <Trash2 size={16} />
             </button>
           )}
-          <button onClick={() => onSave({ ...chapter, title: title.trim(), content })} style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}>
+          <button
+            onClick={() => onSave({ ...chapter, title: title.trim(), content })}
+            style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
+          >
             บันทึก
           </button>
         </div>
@@ -787,64 +944,171 @@ ${para}`;
 
       {showKeyInput && (
         <form onSubmit={handleSaveKeys} style={{ background: "#2a3140", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-          <label style={{ fontSize: 12, color: "#c9a15a" }}>🔑 วาง Gemini API Keys (แยกด้วยบรรทัดใหม่ หรือ , )</label>
-          <textarea rows={3} placeholder={`AIzaSyA1...\nAIzaSyB2...`} value={apiKeysInput} onChange={(e) => setApiKeysInput(e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12, fontFamily: "monospace" }} />
+          <label style={{ fontSize: 12, color: "#c9a15a" }}>
+            🔑 วาง Gemini API Keys หลายๆ คีย์ (แยกด้วยบรรทัดใหม่ หรือเครื่องหมาย , )
+          </label>
+          <textarea
+            rows={3}
+            placeholder={`AIzaSyA1...\nAIzaSyB2...\nAIzaSyC3...`}
+            value={apiKeysInput}
+            onChange={(e) => setApiKeysInput(e.target.value)}
+            style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12, fontFamily: "monospace" }}
+          />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "#9099a8" }}>พบ {keyCount} คีย์</span>
-            <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>บันทึกคีย์ทั้งหมด</button>
+            <span style={{ fontSize: 11, color: "#9099a8" }}>ตรวจพบทั้งหมด {keyCount} คีย์</span>
+            <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
+              บันทึกคีย์ทั้งหมด
+            </button>
           </div>
         </form>
       )}
 
       {/* Sub-bar */}
-      <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", background: "#efe6d3", borderBottom: "1px solid #ddd0b3" }}>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#8a7c5e" }}>ตอนที่ {chapter.order}</span>
+      <div
+        style={{
+          flexShrink: 0,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "10px 16px",
+          background: "#efe6d3",
+          borderBottom: "1px solid #ddd0b3",
+        }}
+      >
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#8a7c5e" }}>
+          ตอนที่ {chapter.order}
+        </span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button onClick={() => setFontSize((s) => Math.max(FONT_MIN, s - 1))} style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>ก-</button>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", width: 30, textAlign: "center" }}>{fontSize}</span>
-          <button onClick={() => setFontSize((s) => Math.min(FONT_MAX, s + 1))} style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 15, fontWeight: 700 }}>ก+</button>
+          <button
+            onClick={() => setFontSize((s) => Math.max(FONT_MIN, s - 1))}
+            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+          >
+            ก-
+          </button>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", width: 30, textAlign: "center" }}>
+            {fontSize}
+          </span>
+          <button
+            onClick={() => setFontSize((s) => Math.min(FONT_MAX, s + 1))}
+            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 15, fontWeight: 700 }}
+          >
+            ก+
+          </button>
         </div>
       </div>
 
       {/* Writing area */}
       <div style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
         <div style={{ padding: "20px 18px 60px" }}>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="ชื่อตอน (ไม่บังคับ)" style={{ width: "100%", border: "none", outline: "none", background: "transparent", fontFamily: "'Noto Serif Thai', serif", fontSize: fontSize + 4, fontWeight: 700, marginBottom: 14, color: "#221d14" }} />
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="ชื่อตอน (ไม่บังคับ)"
+            style={{
+              width: "100%",
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              fontFamily: "'Noto Serif Thai', serif",
+              fontSize: fontSize + 4,
+              fontWeight: 700,
+              marginBottom: 14,
+              color: "#221d14",
+            }}
+          />
 
           {/* โซนปุ่มเครื่องมือ */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-            <span style={{ fontSize: 12, color: "#8a7c5e" }}>💡 กด Enter ขึ้นย่อหน้าอัตโนมัติ</span>
+            <span style={{ fontSize: 12, color: "#8a7c5e" }}>
+              💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ
+            </span>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              
-              {/* 🟢 ปุ่มเปิดเมนูเปลี่ยนสรรพนาม */}
-              <button onClick={() => setShowReplace(!showReplace)} style={{ background: showReplace ? "#d0c3a5" : "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-                🔄 เปลี่ยนสรรพนาม
+              <button
+                onClick={handleFixDialogueQuotes}
+                style={{
+                  background: "#efe6d3",
+                  border: "1px solid #cabb98",
+                  color: "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600
+                }}
+              >
+                💬 ตรวจ/ใส่ "..."
               </button>
 
-              <button onClick={handleGeminiProofread} disabled={isAiProcessing} style={{ background: isAiProcessing ? "#d0c3a5" : "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: isAiProcessing ? "wait" : "pointer", fontWeight: 600 }}>
+              <button
+                onClick={handleGeminiProofread}
+                disabled={isAiProcessing}
+                style={{
+                  background: isAiProcessing ? "#d0c3a5" : "#1a202a",
+                  border: "1px solid #c9a15a",
+                  color: "#c9a15a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: isAiProcessing ? "wait" : "pointer",
+                  fontWeight: 600
+                }}
+              >
                 {isAiProcessing ? `⏳ (${progress}%)` : `🤖 AI ตรวจสลับคีย์ (${keyCount})`}
               </button>
-              <button onClick={handleCopyContent} style={{ background: copied ? "#d4edda" : "#efe6d3", border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"), color: copied ? "#155724" : "#4a3f2a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600, transition: "all 0.2s" }}>
+
+              <button
+                onClick={handleCheckPronouns}
+                disabled={isAiProcessing}
+                style={{
+                  background: "#efe6d3",
+                  border: "1px solid #cabb98",
+                  color: "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600
+                }}
+              >
+                👥 ตรวจสรรพนาม
+              </button>
+
+              <button
+                onClick={handleCopyContent}
+                style={{
+                  background: copied ? "#d4edda" : "#efe6d3",
+                  border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"),
+                  color: copied ? "#155724" : "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  transition: "all 0.2s"
+                }}
+              >
                 {copied ? "✓ คัดลอกแล้ว!" : "📋 คัดลอกเนื้อหา"}
               </button>
-              <button onClick={handleAutoIndent} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+
+              <button
+                onClick={handleAutoIndent}
+                style={{
+                  background: "#efe6d3",
+                  border: "1px solid #cabb98",
+                  color: "#4a3f2a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600
+                }}
+              >
                 ✨ จัดย่อหน้าทั้งหมด
               </button>
             </div>
           </div>
 
-          {/* 🟢 กล่องค้นหาและแทนที่คำ */}
-          {showReplace && (
-            <form onSubmit={handleReplaceWords} style={{ background: "#e8dfcc", padding: "10px", borderRadius: 6, marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <input type="text" placeholder="คำเดิม (เช่น ชั้น)" value={searchWord} onChange={(e) => setSearchWord(e.target.value)} required style={{ flex: 1, padding: "6px 10px", borderRadius: 4, border: "1px solid #cabb98", fontSize: 13, outline: "none" }} />
-              <span style={{ color: "#8a7c5e" }}>➡️</span>
-              <input type="text" placeholder="คำใหม่ (เช่น ฉัน)" value={replaceWord} onChange={(e) => setReplaceWord(e.target.value)} style={{ flex: 1, padding: "6px 10px", borderRadius: 4, border: "1px solid #cabb98", fontSize: 13, outline: "none" }} />
-              <button type="submit" style={{ background: "#c9a15a", color: "#1a140a", border: "none", padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
-                แทนที่ทั้งหมด
-              </button>
-            </form>
-          )}
-
+          {/* 🟢 แถบ Progress Bar แสดงเปอร์เซ็นต์ความคืบหน้า */}
           {isAiProcessing && (
             <div style={{ marginBottom: 12, background: "#efe6d3", borderRadius: 8, padding: 8, border: "1px solid #ddd0b3" }}>
               <div style={{ fontSize: 12, color: "#4a3f2a", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
@@ -852,7 +1116,14 @@ ${para}`;
                 <span style={{ fontWeight: 700 }}>{progress}%</span>
               </div>
               <div style={{ width: "100%", height: 8, background: "#d0c3a5", borderRadius: 4, overflow: "hidden" }}>
-                <div style={{ width: `${progress}%`, height: "100%", background: "#c9a15a", transition: "width 0.3s ease" }} />
+                <div
+                  style={{
+                    width: `${progress}%`,
+                    height: "100%",
+                    background: "#c9a15a",
+                    transition: "width 0.3s ease"
+                  }}
+                />
               </div>
             </div>
           )}
@@ -863,7 +1134,25 @@ ${para}`;
             </div>
           )}
 
-          <textarea ref={contentRef} value={content} onChange={(e) => setContent(e.target.value)} onKeyDown={handleKeyDown} placeholder="เริ่มเขียนตอนนี้..." style={{ width: "100%", border: "none", outline: "none", background: "transparent", resize: "none", fontSize: fontSize, lineHeight: 1.75, letterSpacing: "0.2px", color: "#2a2318", minHeight: "60vh" }} />
+          <textarea
+            ref={contentRef}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="เริ่มเขียนตอนนี้..."
+            style={{
+              width: "100%",
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              resize: "none",
+              fontSize: fontSize,
+              lineHeight: 1.75,
+              letterSpacing: "0.2px",
+              color: "#2a2318",
+              minHeight: "60vh",
+            }}
+          />
 
           <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
             <span>📝 {wordCount(content)} คำ</span>
@@ -873,11 +1162,82 @@ ${para}`;
             <span>(ไม่รวมเว้นวรรค: {charCountNoSpaces})</span>
           </div>
 
-          <button onClick={() => onSaveAndNext({ ...chapter, title: title.trim(), content })} style={{ width: "100%", marginTop: 22, background: "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", fontWeight: 600, fontSize: 14.5, padding: "13px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <button
+            onClick={() => onSaveAndNext({ ...chapter, title: title.trim(), content })}
+            style={{
+              width: "100%",
+              marginTop: 22,
+              background: "#1a202a",
+              border: "1px solid #c9a15a",
+              color: "#c9a15a",
+              fontWeight: 600,
+              fontSize: 14.5,
+              padding: "13px",
+              borderRadius: 10,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+            }}
+          >
             บันทึกและสร้างตอนถัดไป <ArrowRight size={16} />
           </button>
         </div>
       </div>
+
+      {/* Modal Popup ตรวจสอบสรรพนามข้ามยุค */}
+      {showPronounModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#f4ede0", borderRadius: 12, width: "100%", maxWidth: 500, padding: 20, border: "1px solid #cabb98", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+            <h3 style={{ margin: "0 0 10px 0", color: "#221d14", fontSize: 18 }}>👥 ตรวจพบคำสรรพนามยุคปัจจุบัน</h3>
+            <p style={{ fontSize: 13, color: "#6a5c40", margin: "0 0 14px 0" }}>
+              ตรวจสอบพบคำสรรพนามที่อาจไม่เข้ากับบริบทนิยายโบราณ/พีเรียด คุณสามารถพิมพ์คำที่ต้องการเปลี่ยนแทนที่ลงในช่องขวาได้เลยครับ:
+            </p>
+
+            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+              {pronounResults.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 20, color: "#6a5c40" }}>ยอดเยี่ยม! ไม่พบคำสรรพนามยุคปัจจุบันในตอนนี้</div>
+              ) : (
+                pronounResults.map((item, idx) => (
+                  <div key={idx} style={{ background: "#efe6d3", padding: "10px 12px", borderRadius: 8, border: "1px solid #ddd0b3", display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, color: "#a85a5a", fontSize: 14 }}>"{item.word}" <span style={{ fontSize: 11, color: "#8a7c5e", fontWeight: 4 }}>(พบ {item.count} ครั้ง)</span></div>
+                      <div style={{ fontSize: 11, color: "#6a5c40" }}>คำแนะนำ: {item.suggestion}</div>
+                    </div>
+                    <div style={{ width: 120 }}>
+                      <input
+                        type="text"
+                        placeholder="เปลี่ยนเป็น..."
+                        value={replacementMap[item.word] || ""}
+                        onChange={(e) => setReplacementMap({ ...replacementMap, [item.word]: e.target.value })}
+                        style={{ width: "100%", padding: "6px 8px", borderRadius: 4, border: "1px solid #cabb98", background: "#fff", fontSize: 12 }}
+                      />
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                onClick={() => setShowPronounModal(false)}
+                style={{ background: "#d0c3a5", border: "none", color: "#221d14", padding: "8px 16px", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}
+              >
+                ยกเลิก
+              </button>
+              {pronounResults.length > 0 && (
+                <button
+                  onClick={applyPronounReplacements}
+                  style={{ background: "#1a202a", border: "none", color: "#c9a15a", padding: "8px 16px", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}
+                >
+                  ยืนยันเปลี่ยนคำทั้งหมด ✨
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
