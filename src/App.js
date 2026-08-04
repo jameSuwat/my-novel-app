@@ -538,23 +538,21 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
 
 const FONT_MIN = 13;
 const FONT_MAX = 28;
-const FONT_SIZE_KEY = "novel-writer-font-size";
-const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys";
-const GEMINI_MODEL = "gemini-2.5-flash";
+const FONT_SIZE_KEY = "novel-writer-font-size-v2";
+const GEMINI_KEY_STORAGE = "novel-writer-gemini-keys-v2";
+const GEMINI_MODEL = "gemini-1.5-flash";
 
 function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
-  const [title, setTitle] = useState(chapter.title);
-  const [content, setContent] = useState(chapter.content);
+  const [title, setTitle] = useState(chapter.title || "");
+  const [content, setContent] = useState(chapter.content || "");
   const [copied, setCopied] = useState(false);
   const [typoNotice, setTypoNotice] = useState("");
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  // API Keys State
   const [apiKeysInput, setApiKeysInput] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
   const [showKeyInput, setShowKeyInput] = useState(false);
 
-  // Modal สรรพนามข้ามยุค
   const [showPronounModal, setShowPronounModal] = useState(false);
   const [pronounResults, setPronounResults] = useState([]);
   const [replacementMap, setReplacementMap] = useState({});
@@ -694,12 +692,12 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     if (fixesCount > 0) {
       setTypoNotice(`✨ เติม/จัดระเบียบเครื่องหมายคำพูด "..." ให้แล้ว ${fixesCount} จุด!`);
     } else {
-      setTypoNotice('✓ ไม่พบคำพูดที่ขาดเครื่องหมาย (หรือลองคลุมดำข้อความแล้วกดปุ่มนี้เพื่อใส่ "..." ได้ครับ)');
+      setTypoNotice('✓ ไม่พบคำพูดที่ขาดเครื่องหมาย');
     }
     setTimeout(() => setTypoNotice(""), 4000);
   };
 
-  const fetchWithRetry = async (para, key, retries = 3, delay = 2000) => {
+  const fetchWithRetry = async (para, keyList, retries = 3) => {
     if (!para.trim()) return para;
 
     const promptText = `คุณคือบรรณาธิการตรวจทานนิยายภาษาไทย หน้าที่ของคุณคือ:
@@ -712,9 +710,10 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
 ${para}`;
 
     for (let attempt = 0; attempt < retries; attempt++) {
+      const currentKey = keyList[Math.floor(Math.random() * keyList.length)];
       try {
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -726,18 +725,18 @@ ${para}`;
 
         const data = await response.json();
         if (data.error) {
-          if (data.error.code === 429 && attempt < retries - 1) {
-            await new Promise((resolve) => setTimeout(resolve, delay * (attempt + 1)));
+          if (data.error.code === 429) {
+            await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
             continue;
           }
-          throw new Error(data.error.message || "เกิดข้อผิดพลาดจาก Gemini API");
+          throw new Error(data.error.message);
         }
 
         const aiFixed = data.candidates?.[0]?.content?.parts?.[0]?.text;
         return aiFixed ? aiFixed.trim() : para;
       } catch (err) {
-        if (attempt === retries - 1) throw err;
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (attempt === retries - 1) return para;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
     return para;
@@ -750,9 +749,8 @@ ${para}`;
     }
 
     let keyList = getActiveKeyList();
-
     if (keyList.length === 0) {
-      const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ\n(หากมีหลายคีย์ ให้คั่นด้วยเครื่องหมายจุลภาค , หรือขึ้นบรรทัดใหม่):");
+      const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ (หลายคีย์คั่นด้วย , หรือขึ้นบรรทัดใหม่):");
       if (!input) return;
       setApiKeysInput(input);
       localStorage.setItem(GEMINI_KEY_STORAGE, input);
@@ -770,30 +768,20 @@ ${para}`;
       let completedCount = 0;
 
       for (let i = 0; i < total; i++) {
-        const para = paragraphs[i];
-        const currentKey = keyList[i % keyList.length];
-
+        const para = paragraphs.length > i ? paragraphs[i] : "";
         if (!para.trim()) {
           fixedParagraphs[i] = para;
           completedCount++;
           continue;
         }
 
-        try {
-          fixedParagraphs[i] = await fetchWithRetry(para, currentKey);
-        } catch (err) {
-          console.error(`Paragraph ${i} error:`, err);
-          fixedParagraphs[i] = para;
-        }
-
+        fixedParagraphs[i] = await fetchWithRetry(para, keyList);
         completedCount++;
         const currentPercent = Math.round((completedCount / total) * 100);
         setProgress(currentPercent);
         setTypoNotice(`🤖 กำลังตรวจทาน... (${completedCount}/${total} ย่อหน้า) - ${currentPercent}%`);
 
-        if (i < total - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 300));
-        }
+        await new Promise((resolve) => setTimeout(resolve, 400));
       }
 
       setContent(fixedParagraphs.join("\n\n"));
@@ -807,7 +795,6 @@ ${para}`;
     }
   };
 
-  // 🟢 🔍 ฟังก์ชันตรวจสอบสรรพนามข้ามยุค (แก้ไขให้หมุนเวียนสลับ 8 API Keys ครบถ้วน)
   const handleCheckPronouns = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนตรวจสอบสรรพนามครับ");
@@ -839,9 +826,8 @@ ${content}`;
     let success = false;
     let rawText = "[]";
 
-    // วนลูปสลับใช้ทุกคีย์ที่มี (Multi-Key Rotation) พร้อมระบบลองใหม่หากติด Quota 429
-    for (let attempt = 0; attempt < keyList.length * 2; attempt++) {
-      const currentKey = keyList[attempt % keyList.length];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const currentKey = keyList[Math.floor(Math.random() * keyList.length)];
       try {
         const response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
@@ -857,7 +843,7 @@ ${content}`;
         const data = await response.json();
         if (data.error) {
           if (data.error.code === 429) {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
+            await new Promise((resolve) => setTimeout(resolve, 2000));
             continue;
           }
           throw new Error(data.error.message);
@@ -867,7 +853,7 @@ ${content}`;
         success = true;
         break;
       } catch (err) {
-        if (attempt === keyList.length * 2 - 1) {
+        if (attempt === 4) {
           alert("เกิดข้อผิดพลาดในการตรวจสอบสรรพนาม: " + err.message);
         }
       }
@@ -956,13 +942,8 @@ ${content}`;
               <Trash2 size={16} />
             </button>
           )}
-          {/* 🟢 ปุ่มบันทึกหลัก บังคับเซฟค่าล่าสุดทันที */}
           <button
             onClick={() => {
-              if (isAiProcessing) {
-                if (!confirm("AI กำลังทำงานอยู่ คุณต้องการยกเลิกและบันทึกเนื้อหาตอนนี้เลยใช่หรือไม่?")) return;
-                setIsAiProcessing(false);
-              }
               onSave({ ...chapter, title: title.trim(), content });
             }}
             style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
@@ -1193,7 +1174,9 @@ ${content}`;
           </div>
 
           <button
-            onClick={() => onSaveAndNext({ ...chapter, title: title.trim(), content })}
+            onClick={() => {
+              onSaveAndNext({ ...chapter, title: title.trim(), content });
+            }}
             style={{
               width: "100%",
               marginTop: 22,
