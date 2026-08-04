@@ -807,7 +807,7 @@ ${para}`;
     }
   };
 
-  // 🟢 🔍 ฟังก์ชันตรวจสอบสรรพนามข้ามยุค (รองรับ Multi-Key + Auto-Retry)
+  // 🟢 🔍 ฟังก์ชันตรวจสอบสรรพนามข้ามยุค (แก้ไขให้หมุนเวียนสลับ 8 API Keys ครบถ้วน)
   const handleCheckPronouns = async () => {
     if (!content.trim()) {
       alert("กรุณาใส่เนื้อหานิยายก่อนตรวจสอบสรรพนามครับ");
@@ -839,7 +839,7 @@ ${content}`;
     let success = false;
     let rawText = "[]";
 
-    // วนลูปสลับคีย์และรองรับ Retry หากติด 429 Quota
+    // วนลูปสลับใช้ทุกคีย์ที่มี (Multi-Key Rotation) พร้อมระบบลองใหม่หากติด Quota 429
     for (let attempt = 0; attempt < keyList.length * 2; attempt++) {
       const currentKey = keyList[attempt % keyList.length];
       try {
@@ -858,7 +858,7 @@ ${content}`;
         if (data.error) {
           if (data.error.code === 429) {
             await new Promise((resolve) => setTimeout(resolve, 1500));
-            continue; // ลองใช้คีย์ถัดไป
+            continue;
           }
           throw new Error(data.error.message);
         }
@@ -956,8 +956,15 @@ ${content}`;
               <Trash2 size={16} />
             </button>
           )}
+          {/* 🟢 ปุ่มบันทึกหลัก บังคับเซฟค่าล่าสุดทันที */}
           <button
-            onClick={() => onSave({ ...chapter, title: title.trim(), content })}
+            onClick={() => {
+              if (isAiProcessing) {
+                if (!confirm("AI กำลังทำงานอยู่ คุณต้องการยกเลิกและบันทึกเนื้อหาตอนนี้เลยใช่หรือไม่?")) return;
+                setIsAiProcessing(false);
+              }
+              onSave({ ...chapter, title: title.trim(), content });
+            }}
             style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
           >
             บันทึก
