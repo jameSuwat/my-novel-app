@@ -135,14 +135,30 @@ export default function NovelLibraryApp() {
     async function fetchFromFirebase() {
       try {
         const querySnapshot = await getDocs(collection(db, "novels"));
-        const fetched = querySnapshot.docs.map(doc => doc.data());
-        
-        if (fetched.length > 0) {
-          setNovels(fetched);
+        const baseNovels = querySnapshot.docs.map(snap => ({ ...snap.data(), chapters: [] }));
+
+        if (baseNovels.length > 0) {
+          const hydrated = [];
+          for (const n of baseNovels) {
+            const chapterSnapshot = await getDocs(collection(db, "novels", n.id, "chapters"));
+            const chapters = chapterSnapshot.docs
+              .map(snap => snap.data())
+              .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+            // รองรับข้อมูลเก่าที่ chapters ยังอยู่ใน document หลัก
+            const source = querySnapshot.docs.find(snap => snap.id === n.id)?.data() || {};
+            const legacyChapters = Array.isArray(source.chapters) ? source.chapters : [];
+            hydrated.push({ ...n, chapters: chapters.length ? chapters : legacyChapters });
+          }
+          setNovels(hydrated);
         } else {
           setNovels(seedNovels);
           for (const n of seedNovels) {
-            await setDoc(doc(db, "novels", n.id), n);
+            const { chapters = [], ...meta } = n;
+            await setDoc(doc(db, "novels", n.id), meta);
+            for (const ch of chapters) {
+              await setDoc(doc(db, "novels", n.id, "chapters", ch.id), ch);
+            }
           }
         }
       } catch (e) {
@@ -168,11 +184,16 @@ export default function NovelLibraryApp() {
   const forceSaveToCloud = async () => {
     try {
       for (const n of novels) {
-        await setDoc(doc(db, "novels", n.id), n);
+        const { chapters = [], ...meta } = n;
+        await setDoc(doc(db, "novels", n.id), meta);
+        for (const ch of chapters) {
+          await setDoc(doc(db, "novels", n.id, "chapters", ch.id), ch);
+        }
       }
       alert("✅ บันทึกขึ้นคลาวด์สำเร็จ!");
     } catch (e) {
-      alert("❌ บันทึกไม่สำเร็จ: ขนาดข้อมูลอาจใหญ่เกินไป");
+      console.error("Cloud save failed:", e);
+      alert(`❌ บันทึกไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาดในการบันทึก"}`);
     }
   };
 
@@ -195,7 +216,8 @@ export default function NovelLibraryApp() {
       const nextNovels = prev.map((n) => (n.id === id ? { ...n, ...processedPatch } : n));
       const targetNovel = nextNovels.find(n => n.id === id);
       if (targetNovel) {
-        setDoc(doc(db, "novels", id), targetNovel).catch((err) => console.error("Sync error:", err));
+        const { chapters = [], ...meta } = targetNovel;
+        setDoc(doc(db, "novels", id), meta).catch((err) => console.error("Sync error:", err));
       }
       return nextNovels;
     });
@@ -234,39 +256,64 @@ export default function NovelLibraryApp() {
     setIsNewChapter(true);
   }
 
-  function saveChapter(ch) {
+  async function saveChapter(ch) {
     if (!current) return;
-    const chapters = current.chapters || [];
-    let nextChapters;
-    if (isNewChapter) {
-      nextChapters = [...chapters, { ...ch, id: `c-${Date.now()}`, updatedAt: Date.now() }];
-    } else {
-      nextChapters = chapters.map((c) => (c.id === ch.id ? { ...ch, updatedAt: Date.now() } : c));
+    const chapter = {
+      ...ch,
+      id: isNewChapter ? `c-${Date.now()}` : ch.id,
+      updatedAt: Date.now(),
+    };
+
+    // บันทึกเฉพาะตอนนี้ลง subcollection ไม่ส่งเนื้อหาทั้งเรื่องกลับไป Firebase
+    try {
+      await setDoc(doc(db, "novels", current.id, "chapters", chapter.id), chapter);
+      setNovels((prev) => prev.map((n) => {
+        if (n.id !== current.id) return n;
+        const chapters = n.chapters || [];
+        const exists = chapters.some(c => c.id === chapter.id);
+        return { ...n, chapters: exists ? chapters.map(c => c.id === chapter.id ? chapter : c) : [...chapters, chapter] };
+      }));
+      setOpenChapter(null);
+    } catch (e) {
+      console.error("Chapter save failed:", e);
+      alert(`❌ บันทึกตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}`);
     }
-    updateNovel(current.id, { chapters: nextChapters });
-    setOpenChapter(null);
   }
 
-  function saveChapterAndNext(ch) {
+  async function saveChapterAndNext(ch) {
     if (!current) return;
-    const chapters = current.chapters || [];
-    let nextChapters;
-    if (isNewChapter) {
-      nextChapters = [...chapters, { ...ch, id: `c-${Date.now()}`, updatedAt: Date.now() }];
-    } else {
-      nextChapters = chapters.map((c) => (c.id === ch.id ? { ...ch, updatedAt: Date.now() } : c));
+    const chapter = {
+      ...ch,
+      id: isNewChapter ? `c-${Date.now()}` : ch.id,
+      updatedAt: Date.now(),
+    };
+    try {
+      await setDoc(doc(db, "novels", current.id, "chapters", chapter.id), chapter);
+      const nextChapters = (() => {
+        const chapters = current.chapters || [];
+        const exists = chapters.some(c => c.id === chapter.id);
+        return exists ? chapters.map(c => c.id === chapter.id ? chapter : c) : [...chapters, chapter];
+      })();
+      setNovels((prev) => prev.map((n) => n.id === current.id ? { ...n, chapters: nextChapters } : n));
+      const nextOrder = Math.max(0, ...nextChapters.map((c) => c.order || 0)) + 1;
+      setOpenChapter({ id: null, order: nextOrder, title: "", content: "", updatedAt: Date.now() });
+      setIsNewChapter(true);
+    } catch (e) {
+      console.error("Chapter save failed:", e);
+      alert(`❌ บันทึกตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}`);
     }
-    updateNovel(current.id, { chapters: nextChapters });
-    const nextOrder = Math.max(...nextChapters.map((c) => c.order)) + 1;
-    setOpenChapter({ id: null, order: nextOrder, title: "", content: "", updatedAt: Date.now() });
-    setIsNewChapter(true);
   }
 
-  function deleteChapter(id) {
+  async function deleteChapter(id) {
     if (!current) return;
-    const chapters = current.chapters || [];
-    updateNovel(current.id, { chapters: chapters.filter((c) => c.id !== id) });
-    setOpenChapter(null);
+    try {
+      await deleteDoc(doc(db, "novels", current.id, "chapters", id));
+      setNovels((prev) => prev.map((n) => n.id === current.id ? { ...n, chapters: (n.chapters || []).filter(c => c.id !== id) } : n));
+      setOpenChapter(null);
+    } catch (e) {
+      console.error("Chapter delete failed:", e);
+      alert(`❌ ลบตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}`);
+    }
   }
 
   if (!isLoaded) {
