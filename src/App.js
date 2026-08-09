@@ -52,10 +52,52 @@ function timeAgo(ts) {
   return `${day} วันที่แล้ว`;
 }
 
-function wordCount(text) {
+function countThaiWords(text) {
   const t = (text || "").trim();
   if (!t) return 0;
-  return t.split(/\s+/).length;
+
+  // ใช้ Intl.Segmenter เพื่อแยกคำภาษาไทยตามคำจริง
+  // และ fallback เป็นการนับกลุ่มอักขระ/ช่องว่าง หาก browser รุ่นเก่าไม่รองรับ
+  try {
+    if (typeof Intl !== "undefined" && Intl.Segmenter) {
+      const segmenter = new Intl.Segmenter("th", { granularity: "word" });
+      let count = 0;
+      for (const part of segmenter.segment(t)) {
+        if (part.isWordLike) count++;
+      }
+      return count;
+    }
+  } catch (e) {
+    // fallback ด้านล่าง
+  }
+
+  return t.split(/\s+/).filter(Boolean).length;
+}
+
+function countCharacters(text, { includeSpaces = true } = {}) {
+  const t = text || "";
+  if (!includeSpaces) {
+    return countGraphemes(t.replace(/\s/g, ""));
+  }
+  return countGraphemes(t);
+}
+
+function countGraphemes(text) {
+  const t = text || "";
+  try {
+    if (typeof Intl !== "undefined" && Intl.Segmenter) {
+      const segmenter = new Intl.Segmenter("th", { granularity: "grapheme" });
+      return Array.from(segmenter.segment(t)).length;
+    }
+  } catch (e) {
+    // fallback สำหรับ browser ที่ไม่รองรับ Intl.Segmenter
+  }
+  return Array.from(t).length;
+}
+
+// ใช้ตัวนับเดียวกันทั้งแอป เพื่อให้ค่าที่แสดงตรงกัน
+function wordCount(text) {
+  return countThaiWords(text);
 }
 
 function novelUpdatedAt(novel) {
@@ -1047,8 +1089,10 @@ ${content}`;
     }
   };
 
-  const charCountTotal = content ? content.length : 0;
-  const charCountNoSpaces = content ? content.replace(/\s+/g, "").length : 0;
+  // นับเป็น “ตัวอักษรที่ผู้ใช้มองเห็น” ไม่ใช่ UTF-16 code units
+  // เช่น สระ/วรรณยุกต์ไทยจะไม่ถูกนับแยกเป็นตัวอักษรอีกต่อไป
+  const charCountTotal = countCharacters(content, { includeSpaces: true });
+  const charCountNoSpaces = countCharacters(content, { includeSpaces: false });
   const keyCount = getActiveKeyList().length;
 
   return (
