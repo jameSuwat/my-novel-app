@@ -408,17 +408,23 @@ export default function NovelLibraryApp() {
 
   const forceSaveToCloud = async () => {
     if (!userId) {
-      alert("📴 ยังเชื่อมต่อคลาวด์ไม่ได้ — ข้อมูลถูกบันทึกในเครื่องนี้แล้ว");
+      setTimeout(() => {
+        alert("📴 ยังเชื่อมต่อคลาวด์ไม่ได้ — ข้อมูลถูกบันทึกในเครื่องนี้แล้ว");
+      }, 50);
       return;
     }
     try {
       await pushAllToCloud(userId, novels);
       setUnsynced(false);
-      alert("✅ บันทึกขึ้นคลาวด์สำเร็จ!");
+      setTimeout(() => {
+        alert("✅ บันทึกขึ้นคลาวด์สำเร็จ!");
+      }, 50);
     } catch (e) {
       console.error("Cloud save failed:", e);
       setUnsynced(true);
-      alert(`❌ บันทึกไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาดในการบันทึก"}`);
+      setTimeout(() => {
+        alert(`❌ บันทึกไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาดในการบันทึก"}`);
+      }, 50);
     }
   };
 
@@ -784,8 +790,10 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
     reader.readAsDataURL(file);
   }
 
-  const handleManualSave = () => {
-    if (onForceSave) onForceSave();
+  const handleManualSave = async () => {
+    if (onForceSave) {
+      await onForceSave();
+    }
     setSavedAlert(true);
     setTimeout(() => setSavedAlert(false), 2000);
   };
