@@ -44,22 +44,43 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-// หัวไฟล์ txt ใช้ร่วมกันทั้ง export รายตอนและ export ทั้งเรื่อง
-function chapterToTxt(ch) {
-  const heading = ch.title && ch.title.trim()
-    ? `ตอนที่ ${ch.order} — ${ch.title.trim()}`
-    : `ตอนที่ ${ch.order}`;
-  return [heading, "", ch.content || ""].join("\n");
+// ============================== TXT Export ==============================
+
+// ชื่อไฟล์ = ชื่อตอนที่ผู้ใช้บันทึกไว้เท่านั้น (ไม่แทรกเลขตอนของระบบ)
+function chapterFileName(ch) {
+  return sanitizeFilename(ch?.title?.trim()) || `ตอนที่-${ch?.order ?? "?"}`;
 }
 
-// 📤 ส่งออกรายตอนเป็น .txt — ชื่อไฟล์ตามชื่อตอน
-function exportChapterAsTxt(chapter) {
-  const safeName = sanitizeFilename(chapter.title) || `ตอนที่-${chapter.order}`;
-  // \uFEFF (BOM) ทำให้ Notepad/Excel บน Windows อ่านภาษาไทยถูกต้อง
+// หัวไฟล์ = ชื่อตอนอย่างเดียว — ไม่ใส่ "ตอนที่ N —" กันเลขซ้ำ/ไม่ตรงกับที่บันทึกไว้
+function chapterToTxt(ch) {
+  const t = ch?.title?.trim();
+  const body = ch?.content || "";
+  return t ? `${t}\n\n${body}` : body;
+}
+
+// 📤 เลือก 1 ตอน → ดาวน์โหลด .txt เดี่ยว
+function exportSingleChapter(chapter) {
   downloadBlob(
     new Blob(["\uFEFF" + chapterToTxt(chapter)], { type: "text/plain;charset=utf-8" }),
-    `${safeName}.txt`
+    `${chapterFileName(chapter)}.txt`
   );
+}
+
+// 📦 เลือกหลายตอน → zip เดียว ข้างในเป็น .txt รายตอน (ชื่อซ้ำจะเติม (2), (3) ให้เอง)
+function exportChaptersAsZip(novelTitle, chapters) {
+  const used = new Set();
+  const files = chapters.map((ch) => {
+    const base = chapterFileName(ch);
+    let name = `${base}.txt`;
+    let i = 2;
+    while (used.has(name)) {
+      name = `${base} (${i}).txt`;
+      i++;
+    }
+    used.add(name);
+    return { name, text: chapterToTxt(ch) };
+  });
+  downloadBlob(makeZip(files), `${sanitizeFilename(novelTitle) || "นิยาย"}.zip`);
 }
 
 // ================== ZIP Writer (ไม่ต้องพึ่ง library) ==================
@@ -87,7 +108,7 @@ function dosDateTime(d = new Date()) {
   return { time, date };
 }
 
-// files = [{ name: "01 - xxx.txt", text: "..." }] → Blob แบบ ZIP
+// files = [{ name: "xxx.txt", text: "..." }] → Blob แบบ ZIP
 function makeZip(files) {
   const enc = new TextEncoder();
   const chunks = [];
@@ -150,33 +171,7 @@ function makeZip(files) {
   return new Blob(chunks, { type: "application/zip" });
 }
 
-// 📦 ส่งออกทั้งเรื่อง: ไฟล์ zip เดียว ข้างในแยก .txt รายตอน เรียงตามลำดับ
-function exportNovelAsTxtZip(novel) {
-  const chapters = [...(novel.chapters || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
-  if (!chapters.length) {
-    alert("เรื่องนี้ยังไม่มีตอนให้ส่งออก");
-    return;
-  }
-
-  const used = new Set();
-  const files = chapters.map((ch) => {
-    const pad = String(ch.order).padStart(2, "0"); // 01, 02, ... เรียงถูกต้องใน Explorer
-    const safeName = sanitizeFilename(ch.title?.trim()) || `ตอนที่-${ch.order}`;
-    let name = `${pad} - ${safeName}.txt`;
-    // กันชื่อตอนซ้ำ
-    if (used.has(name)) {
-      let i = 2;
-      while (used.has(`${pad} - ${safeName} (${i}).txt`)) i++;
-      name = `${pad} - ${safeName} (${i}).txt`;
-    }
-    used.add(name);
-    return { name, text: chapterToTxt(ch) };
-  });
-
-  const blob = makeZip(files);
-  const zipName = `${sanitizeFilename(novel.title) || "นิยาย"}.zip`;
-  downloadBlob(blob, zipName);
-}
+// ============================== Utilities ==============================
 
 function useDebouncedValue(value, delay = 300) {
   const [debounced, setDebounced] = useState(value);
@@ -278,6 +273,8 @@ function stripChapters(novel) {
   return meta;
 }
 
+// ============================== Data ==============================
+
 const seedNovels = [
   {
     id: "n1",
@@ -309,6 +306,8 @@ async function pushAllToCloud(uid, novelList) {
     await batch.commit();
   }
 }
+
+// ============================== Main Component ==============================
 
 export default function NovelLibraryApp() {
   const [novels, setNovels] = useState([]);
@@ -638,7 +637,6 @@ export default function NovelLibraryApp() {
           }}
           onAddChapter={addChapter}
           onForceSave={forceSaveToCloud}
-          onExportAll={() => exportNovelAsTxtZip(current)}
         />
       )}
 
@@ -665,6 +663,8 @@ export default function NovelLibraryApp() {
     </div>
   );
 }
+
+// ============================== Library View ==============================
 
 function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
   return (
@@ -748,10 +748,33 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
   );
 }
 
-function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave, onExportAll }) {
+// ============================== Novel View ==============================
+
+function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave }) {
   const chapters = novel.chapters || [];
   const sorted = useMemo(() => [...chapters].sort((a, b) => (a.order || 0) - (b.order || 0)), [chapters]);
   const [savedAlert, setSavedAlert] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+
+  const toggleSelect = (id) =>
+    setSelected((prev) => {
+      const s = new Set(prev);
+      if (s.has(id)) s.delete(id);
+      else s.add(id);
+      return s;
+    });
+
+  const allSelected = sorted.length > 0 && sorted.every((c) => selected.has(c.id));
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(sorted.map((c) => c.id)));
+
+  // เลือก 1 ตอน = ไฟล์ .txt เดี่ยว · เลือกหลายตอน = .zip ข้างในแยก .txt รายตอน
+  const handleExportSelected = () => {
+    const chosen = sorted.filter((c) => selected.has(c.id));
+    if (!chosen.length) return;
+    if (chosen.length === 1) exportSingleChapter(chosen[0]);
+    else exportChaptersAsZip(novel.title, chosen);
+    setSelected(new Set()); // เคลียร์การเลือกหลังส่งออก
+  };
 
   function handleCoverPick(e) {
     const file = e.target.files?.[0];
@@ -856,19 +879,44 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
       </div>
 
       <div style={{ padding: "22px 18px 100px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #262d3a", paddingBottom: 10, marginBottom: 4 }}>
-          <span style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 15, fontWeight: 600, color: "#c9a15a" }}>ตอนทั้งหมด</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {/* ===== แถวเครื่องมือส่งออก .txt ===== */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", borderBottom: "1px solid #262d3a", paddingBottom: 12, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 15, fontWeight: 600, color: "#c9a15a" }}>ตอนทั้งหมด</span>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#5c6372" }}>{chapters.length} รายการ</span>
-            {chapters.length > 0 && (
-              <button
-                onClick={onExportAll}
-                aria-label="ส่งออกทั้งเรื่องเป็นไฟล์ zip"
-                title="ได้ไฟล์ .zip เดียว ข้างในแยก .txt รายตอน"
-                style={{ background: "#1b212b", border: "1px solid #2a3140", color: "#c9a15a", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
-              >
-                📦 ส่งออกทั้งเรื่อง (.txt)
-              </button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {sorted.length > 0 && (
+              <>
+                <button
+                  onClick={toggleAll}
+                  style={{ background: "none", border: "none", color: "#7d8494", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: "4px 2px" }}
+                >
+                  {allSelected ? "ไม่เลือกเลย" : "เลือกทั้งหมด"}
+                </button>
+                <button
+                  onClick={handleExportSelected}
+                  disabled={selected.size === 0}
+                  title={selected.size === 1 ? "ดาวน์โหลดไฟล์ .txt เดี่ยว" : "ดาวน์โหลด .zip ข้างในแยก .txt รายตอน"}
+                  style={{
+                    background: selected.size > 0 ? "#c9a15a" : "#1b212b",
+                    border: `1px solid ${selected.size > 0 ? "#c9a15a" : "#2a3140"}`,
+                    color: selected.size > 0 ? "#1a140a" : "#5c6372",
+                    borderRadius: 8,
+                    padding: "5px 12px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: selected.size > 0 ? "pointer" : "not-allowed",
+                    transition: "all 0.2s",
+                  }}
+                >
+                  {selected.size === 0
+                    ? "📤 ส่งออก .txt (ติ๊กเลือกตอนก่อน)"
+                    : selected.size === 1
+                      ? "📤 ส่งออก 1 ตอน (.txt)"
+                      : `📦 ส่งออก ${selected.size} ตอน (.zip)`}
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -880,33 +928,39 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
           </div>
         ) : (
           sorted.map((ch) => (
-            <button
-              key={ch.id}
-              onClick={() => onOpenChapter(ch, false)}
-              style={{
-                width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "14px 4px",
-                borderTop: "none", borderLeft: "none", borderRight: "none",
-                borderBottom: "1px solid #1f2530",
-                background: "none", cursor: "pointer", textAlign: "left", color: "#e8e3d8",
-              }}
-            >
-              <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#1b212b", border: "1px solid #2a3140", color: "#c9a15a", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, flexShrink: 0 }}>
-                {ch.order}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 15.5, fontWeight: 600 }}>
-                  {ch.title && ch.title.trim() !== "" ? `ตอนที่ ${ch.order} — ${ch.title}` : `ตอนที่ ${ch.order}`}
+            <div key={ch.id} style={{ display: "flex", alignItems: "center", borderBottom: "1px solid #1f2530" }}>
+              <input
+                type="checkbox"
+                checked={selected.has(ch.id)}
+                onChange={() => toggleSelect(ch.id)}
+                aria-label={`เลือก${ch.title?.trim() ? ` "${ch.title.trim()}"` : ` ตอนที่ ${ch.order}`} เพื่อส่งออก`}
+                style={{ width: 18, height: 18, accentColor: "#c9a15a", margin: "0 10px 0 4px", cursor: "pointer", flexShrink: 0 }}
+              />
+              <button
+                onClick={() => onOpenChapter(ch, false)}
+                style={{
+                  flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 14, padding: "14px 4px",
+                  background: "none", border: "none", cursor: "pointer", textAlign: "left", color: "#e8e3d8",
+                }}
+              >
+                <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#1b212b", border: "1px solid #2a3140", color: "#c9a15a", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, flexShrink: 0 }}>
+                  {ch.order}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 3, fontSize: 11.5, color: "#7d8494" }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace" }}>
-                    <Clock size={11} /> {timeAgo(ch.updatedAt)}
-                  </span>
-                  <span>·</span>
-                  <span>{wordCount(ch.content)} คำ</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 15.5, fontWeight: 600 }}>
+                    {ch.title && ch.title.trim() !== "" ? `ตอนที่ ${ch.order} — ${ch.title}` : `ตอนที่ ${ch.order}`}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 3, fontSize: 11.5, color: "#7d8494" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace" }}>
+                      <Clock size={11} /> {timeAgo(ch.updatedAt)}
+                    </span>
+                    <span>·</span>
+                    <span>{wordCount(ch.content)} คำ</span>
+                  </div>
                 </div>
-              </div>
-              <ChevronRight size={18} color="#4b5162" />
-            </button>
+                <ChevronRight size={18} color="#4b5162" />
+              </button>
+            </div>
           ))
         )}
       </div>
@@ -925,6 +979,8 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
     </div>
   );
 }
+
+// ============================== Novel Info Editor ==============================
 
 function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
   const [title, setTitle] = useState(novel.title === "ยังไม่มีชื่อเรื่อง" ? "" : novel.title || "");
@@ -1014,6 +1070,8 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
     </div>
   );
 }
+
+// ============================== Chapter Editor ==============================
 
 const FONT_MIN = 13;
 const FONT_MAX = 28;
@@ -1147,16 +1205,6 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     navigator.clipboard.writeText(content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  // 📤 ส่งออกเนื้อหาตอนนี้เป็นไฟล์ .txt (ชื่อไฟล์ตามชื่อตอน)
-  const handleExportTxt = () => {
-    if (!content.trim()) {
-      alert("ยังไม่มีเนื้อหาให้ส่งออก");
-      return;
-    }
-    exportChapterAsTxt({ order: chapter.order, title: title.trim(), content });
-    showNotice(`📤 ส่งออกไฟล์ "${sanitizeFilename(title) || `ตอนที่-${chapter.order}`}.txt" เรียบร้อย!`, 3000);
   };
 
   const getActiveKeyList = () => {
@@ -1571,9 +1619,6 @@ ${content}`;
             </button>
             <button onClick={handleCopyContent} style={{ background: copied ? "#d4edda" : "#efe6d3", border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"), color: copied ? "#155724" : "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto", transition: "all 0.2s" }}>
               {copied ? "✓ คัดลอกแล้ว!" : "📋 คัดลอกเนื้อหา"}
-            </button>
-            <button onClick={handleExportTxt} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
-              📤 ส่งออก .txt
             </button>
             <button onClick={handleAutoIndent} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
               ✨ จัดย่อหน้าทั้งหมด
