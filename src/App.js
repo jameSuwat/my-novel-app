@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { ChevronLeft, ChevronRight, ArrowRight, Plus, Pencil, Image as ImageIcon, X, Trash2, Clock, BookOpen, Search, Feather } from "lucide-react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc } from "firebase/firestore";
+import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc, writeBatch } from "firebase/firestore";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCyZuVUuCeZ-5Fajn4P0WTWdCI2ceHG4pI",
@@ -14,6 +15,177 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
+
+// ============================== Helpers ==============================
+
+function escapeRegExp(string) {
+  return String(string ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ตัดอักษรต้องห้ามของชื่อไฟล์ออก (Windows: \ / : * ? " < > |)
+function sanitizeFilename(name) {
+  return String(name || "")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/, "") // Windows ไม่ชอบจุด/ช่องว่างท้ายชื่อไฟล์
+    .slice(0, 80);
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+// หัวไฟล์ txt ใช้ร่วมกันทั้ง export รายตอนและ export ทั้งเรื่อง
+function chapterToTxt(ch) {
+  const heading = ch.title && ch.title.trim()
+    ? `ตอนที่ ${ch.order} — ${ch.title.trim()}`
+    : `ตอนที่ ${ch.order}`;
+  return [heading, "", ch.content || ""].join("\n");
+}
+
+// 📤 ส่งออกรายตอนเป็น .txt — ชื่อไฟล์ตามชื่อตอน
+function exportChapterAsTxt(chapter) {
+  const safeName = sanitizeFilename(chapter.title) || `ตอนที่-${chapter.order}`;
+  // \uFEFF (BOM) ทำให้ Notepad/Excel บน Windows อ่านภาษาไทยถูกต้อง
+  downloadBlob(
+    new Blob(["\uFEFF" + chapterToTxt(chapter)], { type: "text/plain;charset=utf-8" }),
+    `${safeName}.txt`
+  );
+}
+
+// ================== ZIP Writer (ไม่ต้องพึ่ง library) ==================
+// สร้างไฟล์ .zip แบบ store (ไม่บีบอัด) ถูกต้องตามสเปค เปิดได้ทุกโปรแกรม
+
+const crcTable = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function dosDateTime(d = new Date()) {
+  const time = ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | (Math.floor(d.getSeconds() / 2) & 31);
+  const date = (((d.getFullYear() - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31);
+  return { time, date };
+}
+
+// files = [{ name: "01 - xxx.txt", text: "..." }] → Blob แบบ ZIP
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const { time, date } = dosDateTime();
+
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const dataBytes = enc.encode("\uFEFF" + f.text); // BOM กันภาษาไทยเพี้ยนบน Notepad
+    const crc = crc32(dataBytes);
+
+    // Local File Header (method 0 = store)
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true);       // version needed
+    lh.setUint16(6, 0x0800, true);   // flag bit 11: ชื่อไฟล์เป็น UTF-8 (จำเป็นมากสำหรับชื่อตอนภาษาไทย!)
+    lh.setUint16(8, 0, true);        // compression: store
+    lh.setUint16(10, time, true);
+    lh.setUint16(12, date, true);
+    lh.setUint32(14, crc, true);
+    lh.setUint32(18, dataBytes.length, true);
+    lh.setUint32(22, dataBytes.length, true);
+    lh.setUint16(26, nameBytes.length, true);
+    lh.setUint16(28, 0, true);
+    chunks.push(lh.buffer, nameBytes, dataBytes);
+
+    central.push({ nameBytes, crc, size: dataBytes.length, offset });
+    offset += 30 + nameBytes.length + dataBytes.length;
+  }
+
+  // Central Directory
+  const cdStart = offset;
+  for (const e of central) {
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true);
+    cd.setUint16(4, 20, true);
+    cd.setUint16(6, 20, true);
+    cd.setUint16(8, 0x0800, true);   // UTF-8 flag ตรงนี้ด้วย
+    cd.setUint16(12, time, true);
+    cd.setUint16(14, date, true);
+    cd.setUint32(16, e.crc, true);
+    cd.setUint32(20, e.size, true);
+    cd.setUint32(24, e.size, true);
+    cd.setUint16(28, e.nameBytes.length, true);
+    cd.setUint32(42, e.offset, true);
+    chunks.push(cd.buffer, e.nameBytes);
+    offset += 46 + e.nameBytes.length;
+  }
+
+  // End of Central Directory
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, central.length, true);
+  eocd.setUint16(10, central.length, true);
+  eocd.setUint32(12, offset - cdStart, true);
+  eocd.setUint32(16, cdStart, true);
+  chunks.push(eocd.buffer);
+
+  return new Blob(chunks, { type: "application/zip" });
+}
+
+// 📦 ส่งออกทั้งเรื่อง: ไฟล์ zip เดียว ข้างในแยก .txt รายตอน เรียงตามลำดับ
+function exportNovelAsTxtZip(novel) {
+  const chapters = [...(novel.chapters || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+  if (!chapters.length) {
+    alert("เรื่องนี้ยังไม่มีตอนให้ส่งออก");
+    return;
+  }
+
+  const used = new Set();
+  const files = chapters.map((ch) => {
+    const pad = String(ch.order).padStart(2, "0"); // 01, 02, ... เรียงถูกต้องใน Explorer
+    const safeName = sanitizeFilename(ch.title?.trim()) || `ตอนที่-${ch.order}`;
+    let name = `${pad} - ${safeName}.txt`;
+    // กันชื่อตอนซ้ำ
+    if (used.has(name)) {
+      let i = 2;
+      while (used.has(`${pad} - ${safeName} (${i}).txt`)) i++;
+      name = `${pad} - ${safeName} (${i}).txt`;
+    }
+    used.add(name);
+    return { name, text: chapterToTxt(ch) };
+  });
+
+  const blob = makeZip(files);
+  const zipName = `${sanitizeFilename(novel.title) || "นิยาย"}.zip`;
+  downloadBlob(blob, zipName);
+}
+
+function useDebouncedValue(value, delay = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
 
 function compressImage(base64Str, maxWidth = 300, quality = 0.7) {
   return new Promise((resolve) => {
@@ -34,6 +206,9 @@ function compressImage(base64Str, maxWidth = 300, quality = 0.7) {
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext("2d");
+      // วางพื้นขาวก่อน กัน PNG โปร่งใสกลายเป็นดำตอน encode เป็น JPEG
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
       ctx.drawImage(img, 0, 0, width, height);
       resolve(canvas.toDataURL("image/jpeg", quality));
     };
@@ -57,7 +232,7 @@ function countThaiWords(text) {
   if (!t) return 0;
 
   // ใช้ Intl.Segmenter เพื่อแยกคำภาษาไทยตามคำจริง
-  // และ fallback เป็นการนับกลุ่มอักขระ/ช่องว่าง หาก browser รุ่นเก่าไม่รองรับ
+  // fallback เป็นการนับกลุ่มอักขระ/ช่องว่าง หาก browser รุ่นเก่าไม่รองรับ
   try {
     if (typeof Intl !== "undefined" && Intl.Segmenter) {
       const segmenter = new Intl.Segmenter("th", { granularity: "word" });
@@ -67,19 +242,8 @@ function countThaiWords(text) {
       }
       return count;
     }
-  } catch (e) {
-    // fallback ด้านล่าง
-  }
-
+  } catch (e) {}
   return t.split(/\s+/).filter(Boolean).length;
-}
-
-function countCharacters(text, { includeSpaces = true } = {}) {
-  const t = text || "";
-  if (!includeSpaces) {
-    return countGraphemes(t.replace(/\s/g, ""));
-  }
-  return countGraphemes(t);
 }
 
 function countGraphemes(text) {
@@ -89,10 +253,13 @@ function countGraphemes(text) {
       const segmenter = new Intl.Segmenter("th", { granularity: "grapheme" });
       return Array.from(segmenter.segment(t)).length;
     }
-  } catch (e) {
-    // fallback สำหรับ browser ที่ไม่รองรับ Intl.Segmenter
-  }
+  } catch (e) {}
   return Array.from(t).length;
+}
+
+function countCharacters(text, { includeSpaces = true } = {}) {
+  const t = text || "";
+  return countGraphemes(includeSpaces ? t : t.replace(/\s/g, ""));
 }
 
 // ใช้ตัวนับเดียวกันทั้งแอป เพื่อให้ค่าที่แสดงตรงกัน
@@ -102,7 +269,13 @@ function wordCount(text) {
 
 function novelUpdatedAt(novel) {
   if (!novel.chapters || !novel.chapters.length) return novel.createdAt;
-  return Math.max(novel.createdAt, ...novel.chapters.map((c) => c.updatedAt));
+  return Math.max(novel.createdAt || 0, ...novel.chapters.map((c) => c.updatedAt));
+}
+
+// ตัด chapters ออกก่อนขึ้น doc หลักเสมอ (ตอนอยู่ใน subcollection เท่านั้น)
+function stripChapters(novel) {
+  const { chapters, ...meta } = novel;
+  return meta;
 }
 
 const seedNovels = [
@@ -121,58 +294,111 @@ const seedNovels = [
 
 const STORAGE_KEY = "novel-writer-app-data";
 
+// เขียนขึ้นคลาวด์เป็นชุด (batch ละไม่เกิน 400 ops) แทน await ทีละ doc
+async function pushAllToCloud(uid, novelList) {
+  const ops = [];
+  for (const n of novelList) {
+    ops.push({ ref: doc(db, "users", uid, "novels", n.id), data: stripChapters(n) });
+    for (const ch of n.chapters || []) {
+      ops.push({ ref: doc(db, "users", uid, "novels", n.id, "chapters", ch.id), data: ch });
+    }
+  }
+  for (let i = 0; i < ops.length; i += 400) {
+    const batch = writeBatch(db);
+    ops.slice(i, i + 400).forEach((op) => batch.set(op.ref, op.data));
+    await batch.commit();
+  }
+}
+
 export default function NovelLibraryApp() {
   const [novels, setNovels] = useState([]);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [userId, setUserId] = useState(null);
+  const [localOnly, setLocalOnly] = useState(false);   // เชื่อมคลาวด์ไม่ได้ → เซฟเครื่องเดียว
+  const [unsynced, setUnsynced] = useState(false);     // มีแก้ไขที่ขึ้นคลาวด์ไม่สำเร็จ
   const [currentId, setCurrentId] = useState(null);
   const [query, setQuery] = useState("");
-  const [editingNovelInfo, setEditingNovelInfo] = useState(null); 
+  const [editingNovelInfo, setEditingNovelInfo] = useState(null);
   const [openChapter, setOpenChapter] = useState(null);
   const [isNewChapter, setIsNewChapter] = useState(false);
   const fileInputRef = useRef(null);
 
+  // mirror ล่าสุดของ novels สำหรับอ่านค่า merged ตอน sync (ไม่ทำ side-effect ใน setState)
+  const novelsRef = useRef([]);
+  useEffect(() => { novelsRef.current = novels; }, [novels]);
+
+  const markSyncFailed = () => setUnsynced(true);
+
+  // ---------- Auth + โหลดข้อมูล ----------
   useEffect(() => {
-    async function fetchFromFirebase() {
+    let cancelled = false;
+
+    const loadLocalFallback = () => {
+      let initial = null;
       try {
-        const querySnapshot = await getDocs(collection(db, "novels"));
-        const baseNovels = querySnapshot.docs.map(snap => ({ ...snap.data(), chapters: [] }));
+        const local = localStorage.getItem(STORAGE_KEY);
+        if (local) {
+          const parsed = JSON.parse(local);
+          if (Array.isArray(parsed) && parsed.length) initial = parsed;
+        }
+      } catch (e) {}
+      setNovels(initial || seedNovels);
+    };
 
-        if (baseNovels.length > 0) {
-          const hydrated = [];
-          for (const n of baseNovels) {
-            const chapterSnapshot = await getDocs(collection(db, "novels", n.id, "chapters"));
-            const chapters = chapterSnapshot.docs
-              .map(snap => snap.data())
-              .sort((a, b) => (a.order || 0) - (b.order || 0));
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user || cancelled) return;
+      setUserId(user.uid);
+      setLocalOnly(false);
+      try {
+        const snap = await getDocs(collection(db, "users", user.uid, "novels"));
+        const loaded = [];
+        for (const nSnap of snap.docs) {
+          const meta = nSnap.data();
+          const chSnap = await getDocs(collection(db, "users", user.uid, "novels", nSnap.id, "chapters"));
+          const chapters = chSnap.docs
+            .map((d) => d.data())
+            .sort((a, b) => (a.order || 0) - (b.order || 0));
+          loaded.push({ ...meta, id: nSnap.id, chapters });
+        }
 
-            // รองรับข้อมูลเก่าที่ chapters ยังอยู่ใน document หลัก
-            const source = querySnapshot.docs.find(snap => snap.id === n.id)?.data() || {};
-            const legacyChapters = Array.isArray(source.chapters) ? source.chapters : [];
-            hydrated.push({ ...n, chapters: chapters.length ? chapters : legacyChapters });
-          }
-          setNovels(hydrated);
+        if (loaded.length > 0) {
+          setNovels(loaded);
         } else {
-          setNovels(seedNovels);
-          for (const n of seedNovels) {
-            const { chapters = [], ...meta } = n;
-            await setDoc(doc(db, "novels", n.id), meta);
-            for (const ch of chapters) {
-              await setDoc(doc(db, "novels", n.id, "chapters", ch.id), ch);
+          // คลังฝั่งผู้ใช้ยังว่าง → ย้ายข้อมูลจาก localStorage เครื่องนี้ขึ้นคลาวด์ส่วนตัว
+          // (ทำงานครั้งเดียวตอนเปิดแอปครั้งแรกหลังอัปเดต ถ้าไม่มีก็ seed ใหม่)
+          let initial = null;
+          try {
+            const local = localStorage.getItem(STORAGE_KEY);
+            if (local) {
+              const parsed = JSON.parse(local);
+              if (Array.isArray(parsed) && parsed.length) initial = parsed;
             }
-          }
+          } catch (e) {}
+          if (!initial) initial = seedNovels;
+          setNovels(initial);
+          await pushAllToCloud(user.uid, initial);
         }
       } catch (e) {
         console.error("โหลดข้อมูลจาก Firebase ล้มเหลว", e);
-        const local = localStorage.getItem(STORAGE_KEY);
-        if (local) setNovels(JSON.parse(local));
-        else setNovels(seedNovels);
+        setLocalOnly(true);
+        loadLocalFallback();
       } finally {
-        setIsLoaded(true);
+        if (!cancelled) setIsLoaded(true);
       }
-    }
-    fetchFromFirebase();
+    });
+
+    signInAnonymously(auth).catch((err) => {
+      console.error("Anonymous sign-in failed:", err);
+      if (cancelled) return;
+      setLocalOnly(true);
+      loadLocalFallback();
+      setIsLoaded(true);
+    });
+
+    return () => { cancelled = true; unsub(); };
   }, []);
 
+  // ---------- Mirror ลง localStorage กันข้อมูลหาย ----------
   useEffect(() => {
     if (isLoaded) {
       try {
@@ -182,17 +408,17 @@ export default function NovelLibraryApp() {
   }, [novels, isLoaded]);
 
   const forceSaveToCloud = async () => {
+    if (!userId) {
+      alert("📴 ยังเชื่อมต่อคลาวด์ไม่ได้ — ข้อมูลถูกบันทึกในเครื่องนี้แล้ว");
+      return;
+    }
     try {
-      for (const n of novels) {
-        const { chapters = [], ...meta } = n;
-        await setDoc(doc(db, "novels", n.id), meta);
-        for (const ch of chapters) {
-          await setDoc(doc(db, "novels", n.id, "chapters", ch.id), ch);
-        }
-      }
+      await pushAllToCloud(userId, novels);
+      setUnsynced(false);
       alert("✅ บันทึกขึ้นคลาวด์สำเร็จ!");
     } catch (e) {
       console.error("Cloud save failed:", e);
+      setUnsynced(true);
       alert(`❌ บันทึกไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาดในการบันทึก"}`);
     }
   };
@@ -212,15 +438,20 @@ export default function NovelLibraryApp() {
       processedPatch.cover = await compressImage(processedPatch.cover);
     }
 
-    setNovels((prev) => {
-      const nextNovels = prev.map((n) => (n.id === id ? { ...n, ...processedPatch } : n));
-      const targetNovel = nextNovels.find(n => n.id === id);
-      if (targetNovel) {
-        const { chapters = [], ...meta } = targetNovel;
-        setDoc(doc(db, "novels", id), meta).catch((err) => console.error("Sync error:", err));
+    // คำนวณ merged doc จาก snapshot ล่าสุด แล้วค่อยอัปเดต state
+    const target = novelsRef.current.find((n) => n.id === id);
+    const merged = target ? { ...target, ...processedPatch } : null;
+
+    setNovels((prev) => prev.map((n) => (n.id === id ? { ...n, ...processedPatch } : n)));
+
+    if (merged && userId) {
+      try {
+        await setDoc(doc(db, "users", userId, "novels", id), stripChapters(merged));
+      } catch (err) {
+        console.error("Sync error:", err);
+        markSyncFailed();
       }
-      return nextNovels;
-    });
+    }
   }
 
   async function saveNovelInfo(data) {
@@ -228,24 +459,49 @@ export default function NovelLibraryApp() {
     if (processedData.cover) {
       processedData.cover = await compressImage(processedData.cover);
     }
+    processedData.title = processedData.title?.trim() || "ยังไม่มีชื่อเรื่อง";
 
     if (editingNovelInfo === "new") {
       const id = `n-${Date.now()}`;
-      const newNovel = { id, chapters: [], createdAt: Date.now(), ...processedData };
+      const newNovel = { id, createdAt: Date.now(), chapters: [], ...processedData };
       setNovels((prev) => [...prev, newNovel]);
       setCurrentId(id);
-      await setDoc(doc(db, "novels", id), newNovel).catch(console.error);
+      if (userId) {
+        try {
+          // ขึ้น doc หลักเฉพาะ meta — ไม่ส่ง chapters: [] ขึ้นไป
+          await setDoc(doc(db, "users", userId, "novels", id), stripChapters(newNovel));
+        } catch (e) {
+          console.error(e);
+          markSyncFailed();
+        }
+      }
     } else {
       await updateNovel(editingNovelInfo.id, processedData);
     }
     setEditingNovelInfo(null);
   }
 
-  function deleteNovel(id) {
+  async function deleteNovel(id) {
+    if (!window.confirm("ลบนิยายเรื่องนี้พร้อมทุกตอนอย่างถาวร? ย้อนกลับไม่ได้")) return;
+
     setNovels((prev) => prev.filter((n) => n.id !== id));
     setEditingNovelInfo(null);
-    setCurrentId(null);
-    deleteDoc(doc(db, "novels", id)).catch(console.error);
+    if (currentId === id) setCurrentId(null);
+
+    if (!userId) return;
+    try {
+      // Firestore ไม่มี cascade delete → ลบตอนใน subcollection ก่อนแล้วค่อยลบเรื่อง
+      const chSnap = await getDocs(collection(db, "users", userId, "novels", id, "chapters"));
+      const refs = [...chSnap.docs.map((d) => d.ref), doc(db, "users", userId, "novels", id)];
+      for (let i = 0; i < refs.length; i += 400) {
+        const batch = writeBatch(db);
+        refs.slice(i, i + 400).forEach((r) => batch.delete(r));
+        await batch.commit();
+      }
+    } catch (e) {
+      console.error(e);
+      markSyncFailed();
+    }
   }
 
   function addChapter() {
@@ -256,76 +512,101 @@ export default function NovelLibraryApp() {
     setIsNewChapter(true);
   }
 
-  async function saveChapter(ch) {
-    if (!current) return;
-    const chapter = {
-      ...ch,
-      id: isNewChapter ? `c-${Date.now()}` : ch.id,
-      updatedAt: Date.now(),
-    };
+  async function persistChapterDoc(novelId, chapter) {
+    if (userId) {
+      await setDoc(doc(db, "users", userId, "novels", novelId, "chapters", chapter.id), chapter);
+    }
+  }
 
-    // บันทึกเฉพาะตอนนี้ลง subcollection ไม่ส่งเนื้อหาทั้งเรื่องกลับไป Firebase
+  // return true = สำเร็จ, false = ล้มเหลว (editor จะไม่ปิด ข้อความยังอยู่ครบ)
+  async function saveChapter(ch) {
+    if (!current) return false;
+    const chapter = { ...ch, id: isNewChapter ? `c-${Date.now()}` : ch.id, updatedAt: Date.now() };
     try {
-      await setDoc(doc(db, "novels", current.id, "chapters", chapter.id), chapter);
-      setNovels((prev) => prev.map((n) => {
-        if (n.id !== current.id) return n;
-        const chapters = n.chapters || [];
-        const exists = chapters.some(c => c.id === chapter.id);
-        return { ...n, chapters: exists ? chapters.map(c => c.id === chapter.id ? chapter : c) : [...chapters, chapter] };
-      }));
+      await persistChapterDoc(current.id, chapter);
+      setNovels((prev) =>
+        prev.map((n) => {
+          if (n.id !== current.id) return n;
+          const chapters = n.chapters || [];
+          const exists = chapters.some((c) => c.id === chapter.id);
+          return { ...n, chapters: exists ? chapters.map((c) => (c.id === chapter.id ? chapter : c)) : [...chapters, chapter] };
+        })
+      );
       setOpenChapter(null);
+      setIsNewChapter(false);
+      return true;
     } catch (e) {
       console.error("Chapter save failed:", e);
-      alert(`❌ บันทึกตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}`);
+      markSyncFailed();
+      alert(`❌ บันทึกตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}\n(ข้อความยังอยู่ในหน้าเขียน ไม่ได้หายไป)`);
+      return false;
     }
   }
 
   async function saveChapterAndNext(ch) {
-    if (!current) return;
-    const chapter = {
-      ...ch,
-      id: isNewChapter ? `c-${Date.now()}` : ch.id,
-      updatedAt: Date.now(),
-    };
+    if (!current) return false;
+    const chapter = { ...ch, id: isNewChapter ? `c-${Date.now()}` : ch.id, updatedAt: Date.now() };
     try {
-      await setDoc(doc(db, "novels", current.id, "chapters", chapter.id), chapter);
-      const nextChapters = (() => {
-        const chapters = current.chapters || [];
-        const exists = chapters.some(c => c.id === chapter.id);
-        return exists ? chapters.map(c => c.id === chapter.id ? chapter : c) : [...chapters, chapter];
-      })();
-      setNovels((prev) => prev.map((n) => n.id === current.id ? { ...n, chapters: nextChapters } : n));
+      await persistChapterDoc(current.id, chapter);
+
+      const chapters = current.chapters || [];
+      const exists = chapters.some((c) => c.id === chapter.id);
+      const nextChapters = exists
+        ? chapters.map((c) => (c.id === chapter.id ? chapter : c))
+        : [...chapters, chapter];
+
+      setNovels((prev) =>
+        prev.map((n) => {
+          if (n.id !== current.id) return n;
+          const cs = n.chapters || [];
+          const ex = cs.some((c) => c.id === chapter.id);
+          return { ...n, chapters: ex ? cs.map((c) => (c.id === chapter.id ? chapter : c)) : [...cs, chapter] };
+        })
+      );
+
       const nextOrder = Math.max(0, ...nextChapters.map((c) => c.order || 0)) + 1;
       setOpenChapter({ id: null, order: nextOrder, title: "", content: "", updatedAt: Date.now() });
       setIsNewChapter(true);
+      return true;
     } catch (e) {
       console.error("Chapter save failed:", e);
-      alert(`❌ บันทึกตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}`);
+      markSyncFailed();
+      alert(`❌ บันทึกตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}\n(ข้อความยังอยู่ในหน้าเขียน ไม่ได้หายไป)`);
+      return false;
     }
   }
 
   async function deleteChapter(id) {
     if (!current) return;
+    const ch = (current.chapters || []).find((c) => c.id === id);
+    const label = ch?.title?.trim() ? `"${ch.title.trim()}"` : `ตอนที่ ${ch?.order ?? ""}`;
+    if (!window.confirm(`ลบ${label}ถาวร? ย้อนกลับไม่ได้`)) return;
+
+    setNovels((prev) =>
+      prev.map((n) => (n.id === current.id ? { ...n, chapters: (n.chapters || []).filter((c) => c.id !== id) } : n))
+    );
+    setOpenChapter(null);
+
+    if (!userId) return;
     try {
-      await deleteDoc(doc(db, "novels", current.id, "chapters", id));
-      setNovels((prev) => prev.map((n) => n.id === current.id ? { ...n, chapters: (n.chapters || []).filter(c => c.id !== id) } : n));
-      setOpenChapter(null);
+      await deleteDoc(doc(db, "users", userId, "novels", current.id, "chapters", id));
     } catch (e) {
       console.error("Chapter delete failed:", e);
-      alert(`❌ ลบตอนไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาด"}`);
+      markSyncFailed();
     }
   }
 
   if (!isLoaded) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#12161d", color: "#c9a15a", fontFamily: "'Sarabun', sans-serif" }}>
-        <h3>กำลังซิงค์ข้อมูลจากคลาวด์... ☁️</h3>
+        <h3>กำลังเชื่อมต่อคลาวด์... ☁️</h3>
       </div>
     );
   }
 
   return (
     <div style={{ fontFamily: "'Sarabun', sans-serif", background: "#12161d", minHeight: "100vh", color: "#e8e3d8" }}>
+      {/* แนะนำ: ย้ายการโหลดฟอนต์ไปเป็น <link> ใน index.html จะเร็วกว่า @import */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@500;600;700&family=Sarabun:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; }
@@ -346,6 +627,8 @@ export default function NovelLibraryApp() {
         <NovelView
           novel={current}
           fileInputRef={fileInputRef}
+          unsynced={unsynced}
+          localOnly={localOnly}
           onBack={() => setCurrentId(null)}
           onEditInfo={() => setEditingNovelInfo(current)}
           onCoverPick={(dataUrl) => updateNovel(current.id, { cover: dataUrl })}
@@ -355,6 +638,7 @@ export default function NovelLibraryApp() {
           }}
           onAddChapter={addChapter}
           onForceSave={forceSaveToCloud}
+          onExportAll={() => exportNovelAsTxtZip(current)}
         />
       )}
 
@@ -464,9 +748,9 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
   );
 }
 
-function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave }) {
+function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave, onExportAll }) {
   const chapters = novel.chapters || [];
-  const sorted = useMemo(() => [...chapters].sort((a, b) => a.order - b.order), [chapters]);
+  const sorted = useMemo(() => [...chapters].sort((a, b) => (a.order || 0) - (b.order || 0)), [chapters]);
   const [savedAlert, setSavedAlert] = useState(false);
 
   function handleCoverPick(e) {
@@ -488,28 +772,40 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
       <div style={{ position: "sticky", top: 0, zIndex: 10, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#12161dee", backdropFilter: "blur(6px)", width: "100%" }}>
         <button
           onClick={onBack}
+          aria-label="กลับไปหิ้งนิยาย"
           style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", color: "#c9a15a", padding: "16px 18px", fontSize: 14, cursor: "pointer" }}
         >
           <ChevronLeft size={18} /> หิ้งนิยาย
         </button>
 
-        <button
-          onClick={handleManualSave}
-          style={{
-            background: savedAlert ? "#2e5b1e" : "#1b212b",
-            border: `1px solid ${savedAlert ? "#b2d8a0" : "#2a3140"}`,
-            color: savedAlert ? "#e2f0d9" : "#c9a15a",
-            borderRadius: 8,
-            padding: "6px 14px",
-            marginRight: 18,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: "pointer",
-            transition: "all 0.2s"
-          }}
-        >
-          {savedAlert ? "✓ บันทึกบนคลาวด์" : "☁️ บันทึกขึ้นคลาวด์"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 18 }}>
+          {localOnly && (
+            <span title="เชื่อมต่อคลาวด์ไม่ได้ ข้อมูลถูกบันทึกในเครื่องนี้" style={{ fontSize: 11, color: "#c9a15a", background: "#1b212b", border: "1px solid #2a3140", padding: "5px 10px", borderRadius: 8 }}>
+              📴 เฉพาะเครื่องนี้
+            </span>
+          )}
+          {!localOnly && unsynced && (
+            <span title="มีการแก้ไขที่ส่งขึ้นคลาวด์ไม่สำเร็จ กดบันทึกขึ้นคลาวด์เพื่อลองใหม่" style={{ fontSize: 11, color: "#e0a05a", background: "#241c12", border: "1px solid #6b4f22", padding: "5px 10px", borderRadius: 8 }}>
+              ⚠️ ยังไม่ซิงค์
+            </span>
+          )}
+          <button
+            onClick={handleManualSave}
+            style={{
+              background: savedAlert ? "#2e5b1e" : "#1b212b",
+              border: `1px solid ${savedAlert ? "#b2d8a0" : unsynced ? "#a8813f" : "#2a3140"}`,
+              color: savedAlert ? "#e2f0d9" : "#c9a15a",
+              borderRadius: 8,
+              padding: "6px 14px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all 0.2s"
+            }}
+          >
+            {savedAlert ? "✓ บันทึกบนคลาวด์" : "☁️ บันทึกขึ้นคลาวด์"}
+          </button>
+        </div>
       </div>
 
       <div style={{ position: "relative" }}>
@@ -522,17 +818,18 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
           }}
         />
         <div style={{ display: "flex", gap: 16, padding: "0 18px", marginTop: -70 }}>
-          <div
+          <button
             onClick={() => fileInputRef.current?.click()}
+            aria-label="เปลี่ยนภาพปก"
             style={{
-              width: 104, height: 148, borderRadius: 8,
+              width: 104, height: 148, borderRadius: 8, padding: 0,
               background: novel.cover ? `url(${novel.cover}) center/cover no-repeat` : "#232a36",
               border: "1px solid #333c4d", display: "flex", alignItems: "center", justifyContent: "center",
               flexShrink: 0, cursor: "pointer", boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
             }}
           >
             {!novel.cover && <ImageIcon size={24} color="#5c6372" />}
-          </div>
+          </button>
           <input ref={fileInputRef} type="file" accept="image/*" onChange={handleCoverPick} style={{ display: "none" }} />
           <div style={{ paddingTop: 76, flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
@@ -541,6 +838,7 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
               </h1>
               <button
                 onClick={onEditInfo}
+                aria-label="แก้ไขข้อมูลนิยาย"
                 style={{ background: "#1b212b", border: "1px solid #2a3140", borderRadius: 8, padding: 7, color: "#c9a15a", cursor: "pointer", flexShrink: 0 }}
               >
                 <Pencil size={14} />
@@ -560,7 +858,19 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
       <div style={{ padding: "22px 18px 100px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #262d3a", paddingBottom: 10, marginBottom: 4 }}>
           <span style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 15, fontWeight: 600, color: "#c9a15a" }}>ตอนทั้งหมด</span>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#5c6372" }}>{chapters.length} รายการ</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#5c6372" }}>{chapters.length} รายการ</span>
+            {chapters.length > 0 && (
+              <button
+                onClick={onExportAll}
+                aria-label="ส่งออกทั้งเรื่องเป็นไฟล์ zip"
+                title="ได้ไฟล์ .zip เดียว ข้างในแยก .txt รายตอน"
+                style={{ background: "#1b212b", border: "1px solid #2a3140", color: "#c9a15a", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+              >
+                📦 ส่งออกทั้งเรื่อง (.txt)
+              </button>
+            )}
+          </div>
         </div>
 
         {sorted.length === 0 ? (
@@ -575,9 +885,9 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
               onClick={() => onOpenChapter(ch, false)}
               style={{
                 width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "14px 4px",
-                borderBottom: "1px solid #1f2530", background: "none", border: "none",
-                borderBottomWidth: 1, borderBottomStyle: "solid", borderBottomColor: "#1f2530",
-                cursor: "pointer", textAlign: "left", color: "#e8e3d8",
+                borderTop: "none", borderLeft: "none", borderRight: "none",
+                borderBottom: "1px solid #1f2530",
+                background: "none", cursor: "pointer", textAlign: "left", color: "#e8e3d8",
               }}
             >
               <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#1b212b", border: "1px solid #2a3140", color: "#c9a15a", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, flexShrink: 0 }}>
@@ -617,7 +927,7 @@ function NovelView({ novel, fileInputRef, onBack, onEditInfo, onCoverPick, onOpe
 }
 
 function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
-  const [title, setTitle] = useState(novel.title || "");
+  const [title, setTitle] = useState(novel.title === "ยังไม่มีชื่อเรื่อง" ? "" : novel.title || "");
   const [synopsis, setSynopsis] = useState(novel.synopsis || "");
   const [cover, setCover] = useState(novel.cover || null);
   const fileRef = useRef(null);
@@ -637,23 +947,24 @@ function NovelInfoEditor({ novel, isNew, onSave, onCancel, onDelete }) {
           <span style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 16, fontWeight: 600 }}>
             {isNew ? "สร้างนิยายเรื่องใหม่" : "แก้ไขข้อมูลนิยาย"}
           </span>
-          <button onClick={onCancel} style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer" }}>
+          <button onClick={onCancel} aria-label="ปิดหน้าต่าง" style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer" }}>
             <X size={20} />
           </button>
         </div>
 
         <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
-          <div
+          <button
             onClick={() => fileRef.current?.click()}
+            aria-label="เลือกภาพปกจากเครื่อง"
             style={{
-              width: 84, height: 118, borderRadius: 8,
+              width: 84, height: 118, borderRadius: 8, padding: 0,
               background: cover ? `url(${cover}) center/cover no-repeat` : "#232a36",
               border: "1px solid #333c4d", display: "flex", alignItems: "center", justifyContent: "center",
               flexShrink: 0, cursor: "pointer",
             }}
           >
             {!cover && <ImageIcon size={20} color="#5c6372" />}
-          </div>
+          </button>
           <input ref={fileRef} type="file" accept="image/*" onChange={handlePick} style={{ display: "none" }} />
           <div style={{ flex: 1 }}>
             <label style={{ fontSize: 12, color: "#7d8494" }}>ชื่อเรื่อง</label>
@@ -717,6 +1028,7 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   const [typoNotice, setTypoNotice] = useState("");
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [apiKeysInput, setApiKeysInput] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
   const [showKeyInput, setShowKeyInput] = useState(false);
@@ -739,6 +1051,10 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     }
   });
   const contentRef = useRef(null);
+  const scrollRef = useRef(null); // ref ตรงถึง scroll container — ไม่พึ่ง DOM structure
+
+  // นับคำ/นับตัวอักษรจากค่า debounce เพื่อไม่ไล่ segment ทั้งเรื่องทุก keystroke
+  const debouncedContent = useDebouncedValue(content, 300);
 
   useEffect(() => {
     try {
@@ -751,16 +1067,15 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setContent(chapter.content || "");
   }, [chapter.id, chapter.order, chapter.title, chapter.content]);
 
+  // auto-resize textarea + คงตำแหน่ง scroll เดิม
   useEffect(() => {
-    if (contentRef.current) {
-      const scrollContainer = contentRef.current.parentElement.parentElement;
-      const currentScroll = scrollContainer.scrollTop;
-
-      contentRef.current.style.height = "auto";
-      contentRef.current.style.height = contentRef.current.scrollHeight + "px";
-
-      scrollContainer.scrollTop = currentScroll;
-    }
+    const ta = contentRef.current;
+    const container = scrollRef.current;
+    if (!ta || !container) return;
+    const currentScroll = container.scrollTop;
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + "px";
+    container.scrollTop = currentScroll;
   }, [content, fontSize]);
 
   useEffect(() => {
@@ -768,21 +1083,26 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
       setMatchCount(0);
       return;
     }
-    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(escapeRegExp(searchWord), "g");
-    const matches = content.match(regex);
+    const matches = debouncedContent.match(regex);
     setMatchCount(matches ? matches.length : 0);
-  }, [searchWord, content]);
+  }, [searchWord, debouncedContent]);
+
+  const showNotice = (msg, ms = 4000) => {
+    setTypoNotice(msg);
+    setTimeout(() => setTypoNotice(""), ms);
+  };
 
   const handleReplaceAll = () => {
     if (!searchWord) return;
-    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(escapeRegExp(searchWord), "g");
-    const newContent = content.replace(regex, replaceWord);
-    
-    setContent(newContent);
-    setTypoNotice(`✨ แทนที่คำว่า "${searchWord}" เป็น "${replaceWord}" จำนวน ${matchCount} จุดเรียบร้อย!`);
-    setTimeout(() => setTypoNotice(""), 4000);
+    const found = (content.match(regex) || []).length;
+    if (!found) {
+      showNotice(`ไม่พบคำว่า "${searchWord}"`);
+      return;
+    }
+    setContent(content.replace(regex, replaceWord));
+    showNotice(`✨ แทนที่คำว่า "${searchWord}" เป็น "${replaceWord}" จำนวน ${found} จุดเรียบร้อย!`);
   };
 
   const handleAutoIndent = () => {
@@ -800,21 +1120,23 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const { selectionStart, selectionEnd } = e.target;
-      const indent = "\n\n    ";
-      const newContent =
-        content.substring(0, selectionStart) +
-        indent +
-        content.substring(selectionEnd);
+    // Shift+Enter = ขึ้นบรรทัดธรรมดา, Enter ปกติ = ย่อหน้าใหม่
+    if (e.key !== "Enter" || e.shiftKey) return;
+    e.preventDefault();
+    const ta = contentRef.current;
+    if (!ta) return;
+    const indent = "\n\n    ";
 
-      setContent(newContent);
-
+    // ใช้ execCommand เพื่อรักษา undo history (Ctrl+Z ย้อนได้)
+    let done = false;
+    try { done = document.execCommand("insertText", false, indent); } catch (err) { done = false; }
+    if (!done) {
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      setContent(content.substring(0, start) + indent + content.substring(end));
       setTimeout(() => {
         if (contentRef.current) {
-          contentRef.current.selectionStart = contentRef.current.selectionEnd =
-            selectionStart + indent.length;
+          contentRef.current.selectionStart = contentRef.current.selectionEnd = start + indent.length;
         }
       }, 0);
     }
@@ -827,13 +1149,54 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // 📤 ส่งออกเนื้อหาตอนนี้เป็นไฟล์ .txt (ชื่อไฟล์ตามชื่อตอน)
+  const handleExportTxt = () => {
+    if (!content.trim()) {
+      alert("ยังไม่มีเนื้อหาให้ส่งออก");
+      return;
+    }
+    exportChapterAsTxt({ order: chapter.order, title: title.trim(), content });
+    showNotice(`📤 ส่งออกไฟล์ "${sanitizeFilename(title) || `ตอนที่-${chapter.order}`}.txt" เรียบร้อย!`, 3000);
+  };
+
   const getActiveKeyList = () => {
-    const raw = apiKeysInput || localStorage.getItem(GEMINI_KEY_STORAGE) || "";
+    const raw = apiKeysInput || "";
     return raw
       .split(/[\n,]+/)
       .map((k) => k.trim())
       .filter((k) => k.length > 0);
   };
+
+  const ensureKeys = async () => {
+    let keyList = getActiveKeyList();
+    if (keyList.length > 0) return keyList;
+    const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ (หลายคีย์คั่นด้วย , หรือขึ้นบรรทัดใหม่):");
+    if (!input) return null;
+    setApiKeysInput(input);
+    localStorage.setItem(GEMINI_KEY_STORAGE, input);
+    return input.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length > 0);
+  };
+
+  // เรียก Gemini API — ส่ง key ผ่าน header x-goog-api-key แทนการต่อท้าย URL
+  async function callGemini(key, promptText, generationConfig) {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": key,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }] }],
+          ...(generationConfig ? { generationConfig } : {}),
+        }),
+      }
+    );
+    const data = await response.json();
+    if (data.error) throw data.error;
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  }
 
   const handleFixDialogueQuotes = () => {
     if (!content) return;
@@ -845,10 +1208,8 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
         const wrapped = (selectedText.startsWith('"') && selectedText.endsWith('"'))
           ? selectedText.slice(1, -1)
           : `"${selectedText}"`;
-        const newContent = content.substring(0, selectionStart) + wrapped + content.substring(selectionEnd);
-        setContent(newContent);
-        setTypoNotice('✨ ใส่เครื่องหมาย "..." ครอบข้อความที่เลือกเรียบร้อย!');
-        setTimeout(() => setTypoNotice(""), 3000);
+        setContent(content.substring(0, selectionStart) + wrapped + content.substring(selectionEnd));
+        showNotice('✨ ใส่เครื่องหมาย "..." ครอบข้อความที่เลือกเรียบร้อย!', 3000);
         return;
       }
     }
@@ -863,16 +1224,14 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     }
 
     const dialogueVerbRegex = /(พูดว่า|ถามว่า|ตอบว่า|บอกว่า|ตะโกนว่า|กระซิบว่า|อุทานว่า|พึมพำว่า|กระเซ้าว่า|แย้งว่า)\s*([^"\n\r]+)/g;
-    const newFixed = fixed.replace(dialogueVerbRegex, (match, verb, speech) => {
+    fixed = fixed.replace(dialogueVerbRegex, (match, verb, speech) => {
       const trimmedSpeech = speech.trim();
       if (!trimmedSpeech || trimmedSpeech.startsWith('"')) return match;
       fixesCount++;
       return `${verb} "${trimmedSpeech}"`;
     });
-    fixed = newFixed;
 
-    const lines = fixed.split("\n");
-    const fixedLines = lines.map(line => {
+    const fixedLines = fixed.split("\n").map((line) => {
       const quoteCount = (line.match(/"/g) || []).length;
       if (quoteCount % 2 !== 0) {
         fixesCount++;
@@ -883,13 +1242,9 @@ function ChapterEditor({ chapter, onSave, onSaveAndNext, onCancel, onDelete }) {
     fixed = fixedLines.join("\n");
 
     setContent(fixed);
-
-    if (fixesCount > 0) {
-      setTypoNotice(`✨ เติม/จัดระเบียบเครื่องหมายคำพูด "..." ให้แล้ว ${fixesCount} จุด!`);
-    } else {
-      setTypoNotice('✓ ไม่พบคำพูดที่ขาดเครื่องหมาย');
-    }
-    setTimeout(() => setTypoNotice(""), 4000);
+    showNotice(fixesCount > 0
+      ? `✨ เติม/จัดระเบียบเครื่องหมายคำพูด "..." ให้แล้ว ${fixesCount} จุด!`
+      : '✓ ไม่พบคำพูดที่ขาดเครื่องหมาย');
   };
 
   const fetchWithRetry = async (para, keyList, retries = 3) => {
@@ -907,30 +1262,14 @@ ${para}`;
     for (let attempt = 0; attempt < retries; attempt++) {
       const currentKey = keyList[Math.floor(Math.random() * keyList.length)];
       try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptText }] }]
-            })
-          }
-        );
-
-        const data = await response.json();
-        if (data.error) {
-          if (data.error.code === 429) {
-            await new Promise((resolve) => setTimeout(resolve, 2500 * (attempt + 1)));
-            continue;
-          }
-          throw new Error(data.error.message);
-        }
-
-        const aiFixed = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const aiFixed = await callGemini(currentKey, promptText);
         return aiFixed ? aiFixed.trim() : para;
       } catch (err) {
-        if (attempt === retries - 1) return para;
+        if (err?.code === 429 && attempt < retries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2500 * (attempt + 1)));
+          continue;
+        }
+        if (attempt === retries - 1) return para; // ย่อหน้าไหนพลาด คงข้อความเดิมไว้
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
@@ -943,14 +1282,8 @@ ${para}`;
       return;
     }
 
-    let keyList = getActiveKeyList();
-    if (keyList.length === 0) {
-      const input = prompt("🔑 กรุณาใส่ Gemini API Key ของคุณ (หลายคีย์คั่นด้วย , หรือขึ้นบรรทัดใหม่):");
-      if (!input) return;
-      setApiKeysInput(input);
-      localStorage.setItem(GEMINI_KEY_STORAGE, input);
-      keyList = input.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length > 0);
-    }
+    const keyList = await ensureKeys();
+    if (!keyList) return;
 
     setIsAiProcessing(true);
     setProgress(0);
@@ -963,7 +1296,7 @@ ${para}`;
       let completedCount = 0;
 
       for (let i = 0; i < total; i++) {
-        const para = paragraphs.length > i ? paragraphs[i] : "";
+        const para = paragraphs[i] || "";
         if (!para.trim()) {
           fixedParagraphs[i] = para;
           completedCount++;
@@ -980,13 +1313,12 @@ ${para}`;
       }
 
       setContent(fixedParagraphs.join("\n\n"));
-      setTypoNotice(`✨ ตรวจสอบเรียบร้อยสมบูรณ์แล้ว!`);
+      showNotice(`✨ ตรวจสอบเรียบร้อยสมบูรณ์แล้ว!`);
     } catch (err) {
       alert("เกิดข้อผิดพลาด: " + err.message);
       setTypoNotice("");
     } finally {
       setIsAiProcessing(false);
-      setTimeout(() => setTypoNotice(""), 4000);
     }
   };
 
@@ -996,27 +1328,34 @@ ${para}`;
       return;
     }
 
-    let keyList = getActiveKeyList();
-    if (keyList.length === 0) {
-      const input = prompt("🔑 กรุณาใส่ Gemini API Key ก่อนใช้งานตรวจสอบสรรพนาม:");
-      if (!input) return;
-      setApiKeysInput(input);
-      localStorage.setItem(GEMINI_KEY_STORAGE, input);
-      keyList = input.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length > 0);
-    }
+    const keyList = await ensureKeys();
+    if (!keyList) return;
 
     setIsAiProcessing(true);
     setTypoNotice("🔍 AI กำลังสแกนหาสรรพนาม (ข้า, เจ้า, ฉัน, คุณ, เธอ, ฯลฯ)...");
 
     const promptText = `คุณคือนักวิเคราะห์วรรณกรรม ตรวจสอบเนื้อหานิยายภาษาไทยด้านล่างนี้ ค้นหาคำสรรพนามทั้งหมดที่ใช้ เช่น ข้า, เจ้า, ฉัน, คุณ, เธอ, นาง, นาย, ท่าน, ขอรับ, ครับ, ค่ะ, คะ และสรรพนามยุคปัจจุบันที่อาจหลุดมาในนิยายโบราณ/พีเรียด
-ให้ส่งผลลัพธ์กลับมาในรูปแบบ JSON Array ของ Object โดยแต่ละ Object ต้องมีโครงสร้างดังนี้:
-[
-  { "word": "คำที่พบ", "count": จำนวนครั้งที่พบ, "suggestion": "คำแนะนำเบื้องต้น" }
-]
-*สำคัญมาก*: ตอบกลับเฉพาะ JSON แพลนๆ เท่านั้น ห้ามมีคำอธิบายหรือ Markdown อื่นห่อหุ้ม
 
 เนื้อหา:
 ${content}`;
+
+    // Structured Output — โมเดลบังคับให้ตอบ JSON ตาม schema นี้เสมอ
+    const generationConfig = {
+      temperature: 0.1,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            word: { type: "STRING" },
+            count: { type: "INTEGER" },
+            suggestion: { type: "STRING" },
+          },
+          required: ["word", "count", "suggestion"],
+        },
+      },
+    };
 
     let success = false;
     let rawText = "[]";
@@ -1024,33 +1363,14 @@ ${content}`;
     for (let attempt = 0; attempt < 8; attempt++) {
       const currentKey = keyList[Math.floor(Math.random() * keyList.length)];
       try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptText }] }]
-            })
-          }
-        );
-
-        const data = await response.json();
-        if (data.error) {
-          if (data.error.code === 429) {
-            await new Promise((resolve) => setTimeout(resolve, 3000));
-            continue;
-          }
-          throw new Error(data.error.message);
-        }
-
-        rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+        rawText = (await callGemini(currentKey, promptText, generationConfig)) || "[]";
         success = true;
         break;
       } catch (err) {
         if (attempt === 7) {
-          alert("เกิดข้อผิดพลาดในการตรวจสอบสรรพนาม: " + err.message);
+          alert("เกิดข้อผิดพลาดในการตรวจสอบสรรพนาม: " + (err?.message || err));
         }
+        await new Promise((resolve) => setTimeout(resolve, err?.code === 429 ? 3000 : 1200));
       }
     }
 
@@ -1064,7 +1384,7 @@ ${content}`;
 
         setPronounResults(parsedResults);
         const initialMap = {};
-        parsedResults.forEach(item => { initialMap[item.word] = ""; });
+        parsedResults.forEach((item) => { initialMap[item.word] = ""; });
         setReplacementMap(initialMap);
         setShowPronounModal(true);
       } catch (e) {
@@ -1077,22 +1397,20 @@ ${content}`;
     let newContent = content;
     let replacedCount = 0;
 
-    Object.keys(replacementMap).forEach(oldWord => {
-      const newWord = replacementMap[oldWord];
-      if (newWord && newWord.trim() !== "") {
-        const regex = new RegExp(oldWord, "g");
-        const matches = newContent.match(regex);
-        if (matches) {
-          replacedCount += matches.length;
-          newContent = newContent.replace(regex, newWord.trim());
-        }
+    Object.entries(replacementMap).forEach(([oldWord, newWord]) => {
+      if (!oldWord || !newWord || !newWord.trim()) return;
+      // escape กันคำที่ AI ส่งกลับมาอาจมีอักขระ regex แล้วทำให้แอป crash
+      const regex = new RegExp(escapeRegExp(oldWord), "g");
+      const found = newContent.match(regex);
+      if (found && found.length) {
+        replacedCount += found.length;
+        newContent = newContent.replace(regex, newWord.trim());
       }
     });
 
     setContent(newContent);
     setShowPronounModal(false);
-    setTypoNotice(`✨ เปลี่ยนคำสรรพนามเรียบร้อยแล้วทั้งหมด ${replacedCount} จุด!`);
-    setTimeout(() => setTypoNotice(""), 4000);
+    showNotice(`✨ เปลี่ยนคำสรรพนามเรียบร้อยแล้วทั้งหมด ${replacedCount} จุด!`);
   };
 
   const handleSaveKeys = (e) => {
@@ -1103,43 +1421,41 @@ ${content}`;
     alert(`บันทึก Gemini API Key เรียบร้อยทั้งหมด ${count} คีย์!`);
   };
 
-  const triggerSave = () => {
+  const buildPayload = () => ({
+    ...chapter,
+    title: title.trim(),
+    content: content,
+    updatedAt: Date.now(),
+  });
+
+  // รอบันทึกสำเร็จก่อน แล้วค่อยปิด — ถ้าล้มเหลว ข้อความยังอยู่ครบใน editor
+  const triggerSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
     try {
-      const payload = {
-        ...chapter,
-        title: title.trim(),
-        content: content,
-        novelTitle: chapter.novelTitle || "",
-        coverImage: chapter.coverImage || "",
-        updatedAt: Date.now()
-      };
-      onSave(payload);
-      onCancel(); 
+      const ok = await onSave(buildPayload());
+      if (ok !== false) onCancel();
     } catch (err) {
       alert("เกิดข้อผิดพลาดในการบันทึก: " + err.message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const triggerSaveAndNext = () => {
+  const triggerSaveAndNext = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
     try {
-      const payload = {
-        ...chapter,
-        title: title.trim(),
-        content: content,
-        novelTitle: chapter.novelTitle || "",
-        coverImage: chapter.coverImage || "",
-        updatedAt: Date.now()
-      };
-      onSaveAndNext(payload);
+      await onSaveAndNext(buildPayload()); // สำเร็จ → parent เปิดตอนใหม่ให้เอง
     } catch (err) {
       alert("เกิดข้อผิดพลาดในการบันทึกและสร้างตอนถัดไป: " + err.message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  // นับเป็น “ตัวอักษรที่ผู้ใช้มองเห็น” ไม่ใช่ UTF-16 code units
-  // เช่น สระ/วรรณยุกต์ไทยจะไม่ถูกนับแยกเป็นตัวอักษรอีกต่อไป
-  const charCountTotal = countCharacters(content, { includeSpaces: true });
-  const charCountNoSpaces = countCharacters(content, { includeSpaces: false });
+  const charCountTotal = countCharacters(debouncedContent, { includeSpaces: true });
+  const charCountNoSpaces = countCharacters(debouncedContent, { includeSpaces: false });
   const keyCount = getActiveKeyList().length;
 
   return (
@@ -1150,7 +1466,7 @@ ${content}`;
           padding: "14px 16px", background: "#1a202a", borderBottom: "1px solid #2a3140",
         }}
       >
-        <button onClick={onCancel} style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+        <button onClick={onCancel} aria-label="ปิดโดยไม่บันทึก" style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
           <ChevronLeft size={18} /> ปิด
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1162,15 +1478,16 @@ ${content}`;
             🔑 {keyCount > 0 ? `${keyCount} API Keys` : "API Key"}
           </button>
           {onDelete && (
-            <button onClick={onDelete} style={{ background: "none", border: "none", color: "#a85a5a", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+            <button onClick={onDelete} aria-label="ลบตอนนี้" style={{ background: "none", border: "none", color: "#a85a5a", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
               <Trash2 size={16} />
             </button>
           )}
           <button
             onClick={triggerSave}
-            style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 }}
+            disabled={isSaving}
+            style={{ background: "#c9a15a", border: "none", color: "#1a140a", cursor: isSaving ? "wait" : "pointer", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14, opacity: isSaving ? 0.75 : 1 }}
           >
-            บันทึก
+            {isSaving ? "กำลังบันทึก…" : "บันทึก"}
           </button>
         </div>
       </div>
@@ -1188,7 +1505,7 @@ ${content}`;
             style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #4a5568", background: "#1a202a", color: "#fff", fontSize: 12, fontFamily: "monospace" }}
           />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "#9099a8" }}>ตรวจพบทั้งหมด {keyCount} คีย์</span>
+            <span style={{ fontSize: 11, color: "#9099a8" }}>ตรวจพบทั้งหมด {keyCount} คีย์ (เก็บในเครื่องคุณเท่านั้น)</span>
             <button type="submit" style={{ background: "#c9a15a", border: "none", padding: "6px 16px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
               บันทึกคีย์ทั้งหมด
             </button>
@@ -1208,6 +1525,7 @@ ${content}`;
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <button
             onClick={() => setFontSize((s) => Math.max(FONT_MIN, s - 1))}
+            aria-label="ลดขนาดฟอนต์"
             style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
           >
             ก-
@@ -1217,6 +1535,7 @@ ${content}`;
           </span>
           <button
             onClick={() => setFontSize((s) => Math.min(FONT_MAX, s + 1))}
+            aria-label="เพิ่มขนาดฟอนต์"
             style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #cabb98", background: "#f4ede0", color: "#4a3f2a", cursor: "pointer", fontSize: 15, fontWeight: 700 }}
           >
             ก+
@@ -1224,7 +1543,7 @@ ${content}`;
         </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", color: "#2a2318" }}>
         <div style={{ padding: "20px 18px 60px" }}>
           <input
             value={title}
@@ -1233,28 +1552,36 @@ ${content}`;
             style={{ width: "100%", border: "none", outline: "none", background: "transparent", fontFamily: "'Noto Serif Thai', serif", fontSize: fontSize + 4, fontWeight: 700, marginBottom: 14, color: "#221d14" }}
           />
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-            <span style={{ fontSize: 12, color: "#8a7c5e" }}>💡 ทิป: กด Enter เพื่อขึ้นย่อหน้าให้อัตโนมัติ</span>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
-              <button onClick={() => setShowFindReplace(!showFindReplace)} style={{ background: showFindReplace ? "#d0c3a5" : "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
-                🔍 ค้นหา/แทนที่
-              </button>
-              <button onClick={handleFixDialogueQuotes} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
-                💬 ตรวจ/ใส่ "..."
-              </button>
-              <button onClick={handleGeminiProofread} disabled={isAiProcessing} style={{ background: isAiProcessing ? "#d0c3a5" : "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: isAiProcessing ? "wait" : "pointer", fontWeight: 600, flex: "1 1 auto" }}>
-                {isAiProcessing ? `⏳ (${progress}%)` : `🤖 AI ตรวจสลับคีย์ (${keyCount})`}
-              </button>
-              <button onClick={handleCheckPronouns} disabled={isAiProcessing} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
-                👥 ตรวจสรรพนาม
-              </button>
-              <button onClick={handleCopyContent} style={{ background: copied ? "#d4edda" : "#efe6d3", border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"), color: copied ? "#155724" : "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto", transition: "all 0.2s" }}>
-                {copied ? "✓ คัดลอกแล้ว!" : "📋 คัดลอกเนื้อหา"}
-              </button>
-              <button onClick={handleAutoIndent} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
-                ✨ จัดย่อหน้าทั้งหมด
-              </button>
-            </div>
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ fontSize: 12, color: "#8a7c5e" }}>💡 ทิป: Enter = ย่อหน้าใหม่ · Shift+Enter = ขึ้นบรรทัดธรรมดา</span>
+          </div>
+
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
+            <button onClick={() => setShowFindReplace(!showFindReplace)} style={{ background: showFindReplace ? "#d0c3a5" : "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
+              🔍 ค้นหา/แทนที่
+            </button>
+            <button onClick={handleFixDialogueQuotes} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
+              💬 ตรวจ/ใส่ "..."
+            </button>
+            <button onClick={handleGeminiProofread} disabled={isAiProcessing} style={{ background: isAiProcessing ? "#d0c3a5" : "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: isAiProcessing ? "wait" : "pointer", fontWeight: 600, flex: "1 1 auto" }}>
+              {isAiProcessing ? `⏳ (${progress}%)` : `🤖 AI ตรวจสลับคีย์ (${keyCount})`}
+            </button>
+            <button onClick={handleCheckPronouns} disabled={isAiProcessing} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
+              👥 ตรวจสรรพนาม
+            </button>
+            <button onClick={handleCopyContent} style={{ background: copied ? "#d4edda" : "#efe6d3", border: "1px solid " + (copied ? "#c3e6cb" : "#cabb98"), color: copied ? "#155724" : "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto", transition: "all 0.2s" }}>
+              {copied ? "✓ คัดลอกแล้ว!" : "📋 คัดลอกเนื้อหา"}
+            </button>
+            <button onClick={handleExportTxt} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
+              📤 ส่งออก .txt
+            </button>
+            <button onClick={handleAutoIndent} style={{ background: "#efe6d3", border: "1px solid #cabb98", color: "#4a3f2a", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600, flex: "1 1 auto" }}>
+              ✨ จัดย่อหน้าทั้งหมด
+            </button>
+          </div>
+
+          <div style={{ fontSize: 10.5, color: "#a09272", margin: "6px 0 10px" }}>
+            🔒 ปุ่ม 🤖 และ 👥 จะส่งข้อความในตอนนี้ไปประมวลผลที่ Google Gemini API (คีย์ของคุณถูกเก็บไว้ในเครื่องเท่านั้น)
           </div>
 
           {showFindReplace && (
@@ -1300,14 +1627,15 @@ ${content}`;
           />
 
           <div style={{ marginTop: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8a7c5e", borderTop: "1px dashed #cabb98", paddingTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <span>📝 {wordCount(content)} คำ</span><span>•</span><span>🔤 {charCountTotal} ตัวอักษร</span><span>•</span><span>(ไม่รวมเว้นวรรค: {charCountNoSpaces})</span>
+            <span>📝 {wordCount(debouncedContent)} คำ</span><span>•</span><span>🔤 {charCountTotal} ตัวอักษร</span><span>•</span><span>(ไม่รวมเว้นวรรค: {charCountNoSpaces})</span>
           </div>
 
           <button
             onClick={triggerSaveAndNext}
-            style={{ width: "100%", marginTop: 22, background: "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", fontWeight: 600, fontSize: 14.5, padding: "13px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+            disabled={isSaving}
+            style={{ width: "100%", marginTop: 22, background: "#1a202a", border: "1px solid #c9a15a", color: "#c9a15a", fontWeight: 600, fontSize: 14.5, padding: "13px", borderRadius: 10, cursor: isSaving ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: isSaving ? 0.75 : 1 }}
           >
-            บันทึกและสร้างตอนถัดไป <ArrowRight size={16} />
+            {isSaving ? "กำลังบันทึก…" : <>บันทึกและสร้างตอนถัดไป <ArrowRight size={16} /></>}
           </button>
         </div>
       </div>
@@ -1326,7 +1654,7 @@ ${content}`;
                 pronounResults.map((item, idx) => (
                   <div key={idx} style={{ background: "#efe6d3", padding: "10px 12px", borderRadius: 8, border: "1px solid #ddd0b3", display: "flex", alignItems: "center", gap: 10 }}>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, color: "#a85a5a", fontSize: 14 }}>"{item.word}" <span style={{ fontSize: 11, color: "#8a7c5e", fontWeight: 4 }}>(พบ {item.count} ครั้ง)</span></div>
+                      <div style={{ fontWeight: 700, color: "#a85a5a", fontSize: 14 }}>"{item.word}" <span style={{ fontSize: 11, color: "#8a7c5e", fontWeight: 400 }}>(พบ {item.count} ครั้ง)</span></div>
                       <div style={{ fontSize: 11, color: "#6a5c40" }}>คำแนะนำ: {item.suggestion}</div>
                     </div>
                     <div style={{ width: 120 }}>
