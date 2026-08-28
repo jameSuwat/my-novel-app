@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
-import { ChevronLeft, ChevronRight, ArrowRight, Plus, Pencil, Image as ImageIcon, X, Trash2, Clock, BookOpen, Search, Feather } from "lucide-react";
+import { ChevronLeft, ChevronRight, ArrowRight, Plus, Pencil, Image as ImageIcon, X, Trash2, Clock, BookOpen, Search, Feather, GripVertical } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
@@ -322,6 +322,32 @@ export default function NovelLibraryApp() {
   const [isNewChapter, setIsNewChapter] = useState(false);
   const fileInputRef = useRef(null);
 
+  // ========== Theme (Dark/Light) ==========
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem("novel-writer-theme");
+      if (saved === "dark" || saved === "light") return saved;
+    } catch (e) {}
+    return "dark";
+  });
+  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("novel-writer-theme", theme); } catch (e) {}
+  }, [theme]);
+
+  // ========== Drag & Drop Reorder ==========
+  const reorderChapters = async (updatedChapters) => {
+    setNovels((prev) => prev.map((n) => n.id === currentId ? { ...n, chapters: updatedChapters } : n));
+    if (userId && currentId) {
+      try {
+        for (const ch of updatedChapters) {
+          await setDoc(doc(db, "users", userId, "novels", currentId, "chapters", ch.id), ch);
+        }
+      } catch (e) { console.error("Reorder sync failed:", e); markSyncFailed(); }
+    }
+  };
+
   // mirror ล่าสุดของ novels สำหรับอ่านค่า merged ตอน sync (ไม่ทำ side-effect ใน setState)
   const novelsRef = useRef([]);
   useEffect(() => { novelsRef.current = novels; }, [novels]);
@@ -610,13 +636,13 @@ export default function NovelLibraryApp() {
   }
 
   return (
-    <div style={{ fontFamily: "'Sarabun', sans-serif", background: "#12161d", minHeight: "100vh", color: "#e8e3d8" }}>
+    <div style={{ fontFamily: "'Sarabun', sans-serif", background: theme === 'dark' ? '#12161d' : '#f8f6f1', minHeight: '100vh', color: theme === 'dark' ? '#e8e3d8' : '#2a2318' }}>
       {/* แนะนำ: ย้ายการโหลดฟอนต์ไปเป็น <link> ใน index.html จะเร็วกว่า @import */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@500;600;700&family=Sarabun:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-thumb { background: #3a4150; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: ${theme === 'dark' ? '#3a4150' : '#c0b8a8'}; border-radius: 4px; }
         textarea, input { font-family: 'Sarabun', sans-serif; }
       `}</style>
 
@@ -627,6 +653,8 @@ export default function NovelLibraryApp() {
           setQuery={setQuery}
           onOpen={(id) => setCurrentId(id)}
           onCreate={() => setEditingNovelInfo("new")}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
       ) : (
         <NovelView
@@ -643,6 +671,9 @@ export default function NovelLibraryApp() {
           }}
           onAddChapter={addChapter}
           onForceSave={forceSaveToCloud}
+          onReorderChapters={reorderChapters}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
       )}
 
@@ -672,7 +703,7 @@ export default function NovelLibraryApp() {
 
 // ============================== Library View ==============================
 
-function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
+function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggleTheme }) {
   return (
     <div>
       <header style={{ padding: "28px 20px 16px", borderBottom: "1px solid #262d3a", position: "sticky", top: 0, background: "#12161dee", backdropFilter: "blur(6px)", zIndex: 10 }}>
@@ -740,6 +771,18 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
       </main>
 
       <button
+        onClick={onToggleTheme}
+        aria-label="สลับธีม"
+        style={{
+          position: "fixed", bottom: 24, left: 24, width: 44, height: 44, borderRadius: "50%",
+          background: "#1b212b", border: "1px solid #2a3140", color: "#c9a15a",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          cursor: "pointer", fontSize: 20, zIndex: 5,
+        }}
+      >
+        {theme === "dark" ? "☀️" : "🌙"}
+      </button>
+      <button
         onClick={onCreate}
         aria-label="สร้างนิยายเรื่องใหม่"
         style={{
@@ -756,11 +799,51 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate }) {
 
 // ============================== Novel View ==============================
 
-function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave }) {
-  const chapters = novel.chapters || [];
+function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave, onReorderChapters, theme, onToggleTheme }) {
+  const chapters = useMemo(() => novel.chapters || [], [novel.chapters]);
   const sorted = useMemo(() => [...chapters].sort((a, b) => (a.order || 0) - (b.order || 0)), [chapters]);
   const [savedAlert, setSavedAlert] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
+  const [dragIdx, setDragIdx] = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
+  const dragItem = useRef(null);
+
+  // ===== Drag & Drop handlers =====
+  const handleDragStart = useCallback((e, index) => {
+    dragItem.current = sorted[index];
+    setDragIdx(index);
+    e.dataTransfer.effectAllowed = "move";
+    const ghost = e.target.cloneNode(true);
+    ghost.style.opacity = "0";
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    setTimeout(() => ghost.remove(), 0);
+  }, [sorted]);
+
+  const handleDragOver = useCallback((e, index) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverIdx(index);
+  }, []);
+
+  const handleDrop = useCallback((e, dropIndex) => {
+    e.preventDefault();
+    const dragIndex = dragIdx;
+    if (dragIndex === null || dragIndex === dropIndex) {
+      setDragIdx(null); setDragOverIdx(null);
+      return;
+    }
+    const reordered = [...sorted];
+    const [draggedItem] = reordered.splice(dragIndex, 1);
+    reordered.splice(dropIndex, 0, draggedItem);
+    const updated = reordered.map((ch, i) => ({ ...ch, order: i + 1 }));
+    onReorderChapters(updated);
+    setDragIdx(null); setDragOverIdx(null); dragItem.current = null;
+  }, [dragIdx, sorted, onReorderChapters]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragIdx(null); setDragOverIdx(null); dragItem.current = null;
+  }, []);
 
   const toggleSelect = (id) =>
     setSelected((prev) => {
@@ -820,6 +903,13 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
               ⚠️ ยังไม่ซิงค์
             </span>
           )}
+          <button
+            onClick={onToggleTheme}
+            aria-label="สลับธีม"
+            style={{ background: "none", border: "1px solid #2a3140", borderRadius: 6, padding: "6px 8px", color: "#c9a15a", cursor: "pointer", fontSize: 16 }}
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
           <button
             onClick={handleManualSave}
             style={{
@@ -935,15 +1025,29 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
             <p style={{ fontSize: 13 }}>แตะปุ่ม + เพื่อเริ่มเขียนตอนแรก</p>
           </div>
         ) : (
-          sorted.map((ch) => (
-            <div key={ch.id} style={{ display: "flex", alignItems: "center", borderBottom: "1px solid #1f2530" }}>
+          sorted.map((ch, index) => (
+            <div
+              key={ch.id}
+              style={{ display: "flex", alignItems: "center", borderBottom: "1px solid #1f2530", background: dragIdx === index ? "#1b212b" : dragOverIdx === index ? "#232a36" : "transparent", transition: "background 0.15s" }}
+              onDragOver={(e) => handleDragOver(e, index)}
+              onDrop={(e) => handleDrop(e, index)}
+              onDragEnd={handleDragEnd}
+            >
               <input
                 type="checkbox"
                 checked={selected.has(ch.id)}
                 onChange={() => toggleSelect(ch.id)}
                 aria-label={`เลือก${ch.title?.trim() ? ` "${ch.title.trim()}"` : ` ตอนที่ ${ch.order}`} เพื่อส่งออก`}
-                style={{ width: 18, height: 18, accentColor: "#c9a15a", margin: "0 10px 0 4px", cursor: "pointer", flexShrink: 0 }}
+                style={{ width: 18, height: 18, accentColor: "#c9a15a", margin: "0 4px 0 4px", cursor: "pointer", flexShrink: 0 }}
               />
+              <div
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                title="ลากเพื่อจัดเรียง"
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, cursor: "grab", color: dragIdx === index ? "#c9a15a" : "#5c6372", flexShrink: 0, borderRadius: 4, transition: "all 0.15s" }}
+              >
+                <GripVertical size={14} />
+              </div>
               <button
                 onClick={() => onOpenChapter(ch, false)}
                 style={{
