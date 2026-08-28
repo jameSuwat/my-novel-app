@@ -1,0 +1,80 @@
+/* =================== Dark Theme (default) =================== */
+:root,
+[data-theme="dark"] {
+  --bg-primary: #12161d;
+  --bg-secondary: #1a202a;
+  --bg-tertiary: #1b212b;
+  --bg-card: #232a36;
+  --bg-hover: #2a3240;
+  --border: #2a3140;
+  --border-light: #333c4d;
+  --border-focus: #c9a15a;
+  --text-primary: #e8e3d8;
+  --text-secondary: #9099a8;
+  --text-muted: #5c6372;
+  --text-dim: #4b5162;
+  --text-dimmer: #6b7180;
+  --accent: #c9a15a;
+  --accent-hover: #d4b06a;
+  --accent-text: #1a140a;
+  --danger: #a85a5a;
+  --danger-bg: #3a2a2a;
+  --warning: #e0a05a;
+  --success-bg: #2e5b1e;
+  --success-text: #e2f0d9;
+  --success-border: #b2d8a0;
+  --unsynced-bg: #241c12;
+  --unsynced-border: #6b4f22;
+  --scrollbar-thumb: #3a4150;
+  --shadow: rgba(0, 0, 0, 0.35);
+  --shadow-lg: rgba(0, 0, 0, 0.4);
+  --accent-shadow: rgba(201, 161, 90, 0.35);
+
+  /* Editor theme */
+  --editor-bg: #f4ede0;
+  --editor-toolbar-bg: #efe6d3;
+  --editor-toolbar-border: #ddd0b3;
+  --editor-input-bg: transparent;
+  --editor-text: #2a2318;
+  --editor-text-muted: #8a7c5e;
+  --editor-text-dim: #a09272;
+  --editor-border: #cabb98;
+  --editor-btn-bg: #efe6d3;
+  --editor-btn-hover: #d0c3a5;
+  --editor-input-border: #cabb98;
+  --editor-input-bg: #fff;
+  --editor-dark-btn-bg: #1a202a;
+  --editor-dark-btn-color: #c9a15a;
+}
+
+/* =================== Light Theme =================== */
+[data-theme="light"] {
+  --bg-primary: #f8f6f1;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f0ede6;
+  --bg-card: #ffffff;
+  --bg-hover: #f0ede6;
+  --border: #ddd5c8;
+  --border-light: #e8e2d8;
+  --border-focus: #b8942e;
+  --text-primary: #2a2318;
+  --text-secondary: #6b6155;
+  --text-muted: #9a9088;
+  --text-dim: #b0a898;
+  --text-dimmer: #c0b8a8;
+  --accent: #b8942e;
+  --accent-hover: #a8842e;
+  --accent-text: #ffffff;
+  --danger: #b84a4a;
+  --danger-bg: #f8e8e8;
+  --warning: #c88a3a;
+  --success-bg: #e8f4e0;
+  --success-text: #2e5b1e;
+  --success-border: #a0c890;
+  --unsynced-bg: #fef4e8;
+  --unsynced-border: #d8b878;
+  --scrollbar-thumb: #c8c0b0;
+  --shadow: rgba(0, 0, 0, 0.08);
+  --shadow-lg: rgba(0, 0, 0, 0.12);
+  --accent-shadow: rgba(184, 148, 46, 0.25);
+}

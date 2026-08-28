@@ -1,0 +1,16 @@
+.app {
+  font-family: 'Sarabun', sans-serif;
+  background: var(--bg-primary);
+  min-height: 100vh;
+  color: var(--text-primary);
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--accent);
+  font-family: 'Sarabun', sans-serif;
+}
