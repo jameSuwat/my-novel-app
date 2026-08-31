@@ -281,9 +281,10 @@ function stripCoverForCloud(novel) {
 }
 
 // ตัดทั้ง chapters และ cover ออกสำหรับการ sync ขึ้น cloud
+// ต้องตั้ง cover: null เพื่อลบ cover เดิมที่ Firestore มีอยู่แล้ว (ไม่งั้น field เดิมจะยังอยู่)
 function stripForCloud(novel) {
   const { chapters, cover, ...meta } = novel;
-  return meta;
+  return { ...meta, cover: null };
 }
 
 // ============================== Data ==============================
