@@ -687,8 +687,9 @@ export default function NovelLibraryApp() {
     );
   }
 
-  // แสดงหน้าล็อกอินถ้ายังไม่ได้เข้าสู่ระบบ
-  if (!userId && showLogin) {
+  // แสดงหน้าล็อกอินเมื่อ user ยังไม่ได้เลือกวิธีเข้าสู่ระบบ
+  // (showLogin = true เสมอตอนเปิดแอป, จะเป็น false ก็ต่อเมื่อกดล็อกอินแล้ว)
+  if (showLogin) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#12161d", color: "#e8e3d8", fontFamily: "'Sarabun', sans-serif", padding: 20 }}>
         <Feather size={40} color="#c9a15a" style={{ marginBottom: 20 }} />
