@@ -316,9 +316,48 @@ async function pushAllToCloud(uid, novelList) {
   }
   for (let i = 0; i < ops.length; i += 400) {
     const batch = writeBatch(db);
-    ops.slice(i, i + 400).forEach((op) => batch.set(op.ref, op.data));
-    await batch.commit();
+    ops.slice(i, i + 400).forEach((op) => batch.set(op.ref, op.data));    await batch.commit();
   }
+}
+
+// ย้ายข้อมูลจาก UID เก่า (Anonymous) มาใส่ UID ใหม่ (Google)
+async function migrateFromOldAccount(oldUid, newUid, onProgress) {
+  const novelsRef = collection(db, "users", oldUid, "novels");
+  const novelsSnap = await getDocs(novelsRef);
+  
+  if (novelsSnap.empty) {
+    throw new Error("ไม่พบข้อมูลในบัญชีเก่า (UID: " + oldUid + ")");
+  }
+  
+  let totalDocs = 0;
+  let migratedDocs = 0;
+  const allOps = [];
+  
+  // อ่าน novel ทั้งหมด + chapters
+  for (const novelDoc of novelsSnap.docs) {
+    const novelData = { id: novelDoc.id, ...novelDoc.data() };
+    allOps.push({ ref: doc(db, "users", newUid, "novels", novelDoc.id), data: { ...novelData, cover: null } });
+    totalDocs++;
+    
+    // อ่าน chapters ของ novel นี้
+    const chaptersRef = collection(db, "users", oldUid, "novels", novelDoc.id, "chapters");
+    const chaptersSnap = await getDocs(chaptersRef);
+    for (const chDoc of chaptersSnap.docs) {
+      allOps.push({ ref: doc(db, "users", newUid, "novels", novelDoc.id, "chapters", chDoc.id), data: chDoc.data() });
+      totalDocs++;
+    }
+  }
+  
+  // เขียนทั้งหมดลง UID ใหม่
+  for (let i = 0; i < allOps.length; i += 400) {
+    const batch = writeBatch(db);
+    allOps.slice(i, i + 400).forEach((op) => batch.set(op.ref, op.data));
+    await batch.commit();
+    migratedDocs += allOps.slice(i, i + 400).length;
+    if (onProgress) onProgress(migratedDocs, totalDocs);
+  }
+  
+  return { novelsCount: novelsSnap.docs.length, docsCount: totalDocs };
 }
 
 // ============================== Main Component ==============================
@@ -337,6 +376,10 @@ export default function NovelLibraryApp() {
   const [showLogin, setShowLogin] = useState(true);
   const [userEmail, setUserEmail] = useState(null);
   const [showUserSettings, setShowUserSettings] = useState(false);
+  const [showMigrate, setShowMigrate] = useState(false);
+  const [migrateOldUid, setMigrateOldUid] = useState("");
+  const [migrateStatus, setMigrateStatus] = useState(null); // null | 'loading' | 'done' | 'error'
+  const [migrateResult, setMigrateResult] = useState(null);
   const fileInputRef = useRef(null);
 
   // ========== Theme (Dark/Light) ==========
@@ -503,6 +546,29 @@ export default function NovelLibraryApp() {
       setShowLogin(true);
     } catch (err) {
       console.error("Sign out failed:", err);
+    }
+  };
+
+  const handleMigrate = async () => {
+    if (!migrateOldUid.trim()) {
+      alert("กรุณาใส่ UID เก่า");
+      return;
+    }
+    if (!userId) {
+      alert("กรุณาล็อกอินด้วย Google ก่อน");
+      return;
+    }
+    setMigrateStatus("loading");
+    try {
+      const result = await migrateFromOldAccount(migrateOldUid.trim(), userId, (done, total) => {
+        setMigrateResult({ done, total });
+      });
+      setMigrateStatus("done");
+      setMigrateResult(result);
+    } catch (err) {
+      console.error("Migration failed:", err);
+      setMigrateStatus("error");
+      setMigrateResult({ error: err.message });
     }
   };
 
@@ -713,6 +779,56 @@ export default function NovelLibraryApp() {
           ⚠️ ถ้าไม่ล็อกอิน ข้อมูลจะเก็บเฉพาะในเครื่องนี้
           เคลียร์ cache แล้วข้อมูลจะหาย
         </p>
+        <button
+          onClick={() => setShowMigrate(true)}
+          style={{ background: "transparent", border: "none", color: "#5c6372", fontSize: 12, cursor: "pointer", marginTop: 10, textDecoration: "underline" }}
+        >
+          📦 ย้ายข้อมูลจากบัญชีเก่า
+        </button>
+        {showMigrate && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); }}>
+            <div style={{ background: "#1e2330", border: "1px solid #3a4150", borderRadius: 16, padding: 28, maxWidth: 400, width: "90%", color: "#e8e3d8" }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                <h3 style={{ margin: 0, fontFamily: "'Noto Serif Thai', serif", color: "#c9a15a" }}>📦 ย้ายข้อมูลจากบัญชีเก่า</h3>
+                <button onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); }} style={{ background: "none", border: "none", color: "#8b93a3", cursor: "pointer" }}><X size={18} /></button>
+              </div>
+              {!userId ? (
+                <p style={{ color: "#8b93a3", fontSize: 14, textAlign: "center" }}>กรุณาล็อกอินด้วย Google ก่อน แล้วค่อยกดย้ายข้อมูล</p>
+              ) : migrateStatus === "done" ? (
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: 16, color: "#4caf50", marginBottom: 8 }}>✅ ย้ายข้อมูลสำเร็จ!</p>
+                  <p style={{ fontSize: 13, color: "#8b93a3" }}>ย้ายนิยาย {migrateResult?.novelsCount || 0} เรื่อง 共 {migrateResult?.docsCount || 0} เอกสาร</p>
+                  <button onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); window.location.reload(); }} style={{ marginTop: 16, background: "#c9a15a", color: "#12161d", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer", fontWeight: 600 }}>รีเฟรชหน้า</button>
+                </div>
+              ) : migrateStatus === "error" ? (
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: 16, color: "#ef5350", marginBottom: 8 }}>❌ ย้ายข้อมูลไม่สำเร็จ</p>
+                  <p style={{ fontSize: 13, color: "#8b93a3" }}>{migrateResult?.error || "ไม่พบข้อมูลในบัญชีเก่า"}</p>
+                  <button onClick={() => { setMigrateStatus(null); setMigrateResult(null); }} style={{ marginTop: 16, background: "#3a4150", color: "#e8e3d8", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer" }}>ลองใหม่</button>
+                </div>
+              ) : migrateStatus === "loading" ? (
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: 14, color: "#c9a15a" }}>กำลังย้ายข้อมูล... ☁️</p>
+                  {migrateResult && <p style={{ fontSize: 12, color: "#8b93a3" }}>{migrateResult.done}/{migrateResult.total} เอกสาร</p>}
+                </div>
+              ) : (
+                <>
+                  <p style={{ fontSize: 13, color: "#8b93a3", marginBottom: 12 }}>ใส่ UID เก่า (Anonymous) ที่ต้องการย้ายข้อมูลมาใส่บัญชี Google ปัจจุบัน</p>
+                  <p style={{ fontSize: 11, color: "#5c6372", marginBottom: 12 }}>วิธีหา UID: Firebase Console → Authentication → Users → คัดลอก UID ของ Anonymous</p>
+                  <input
+                    value={migrateOldUid}
+                    onChange={(e) => setMigrateOldUid(e.target.value)}
+                    placeholder="ใส่ UID เก่า..."
+                    style={{ width: "100%", background: "#12161d", border: "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", color: "#e8e3d8", fontSize: 14, marginBottom: 16, fontFamily: "'JetBrains Mono', monospace" }}
+                  />
+                  <button onClick={handleMigrate} style={{ width: "100%", background: "#c9a15a", color: "#12161d", border: "none", borderRadius: 8, padding: "12px", cursor: "pointer", fontWeight: 600, fontSize: 14 }}>
+                    ย้ายข้อมูล
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
