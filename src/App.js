@@ -334,7 +334,10 @@ export default function NovelLibraryApp() {
   const [editingNovelInfo, setEditingNovelInfo] = useState(null);
   const [openChapter, setOpenChapter] = useState(null);
   const [isNewChapter, setIsNewChapter] = useState(false);
-  const [showLogin, setShowLogin] = useState(false);
+  const [showLogin, setShowLogin] = useState(() => {
+    // แสดงหน้าล็อกอินเฉพาะครั้งแรกที่เปิดแอป (ยังไม่เคยล็อกอินเลย)
+    return !localStorage.getItem("novel-writer-auth-done");
+  });
   const [userEmail, setUserEmail] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -388,6 +391,11 @@ export default function NovelLibraryApp() {
 
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user || cancelled) return;
+      // ถ้ามี session อยู่แล้ว (จาก Google หรือ Anonymous เดิม)
+      // แสดงว่าเคยล็อกอินแล้ว → ไม่ต้องแสดงหน้าล็อกอิน
+      if (localStorage.getItem("novel-writer-auth-done")) {
+        setShowLogin(false);
+      }
       setUserId(user.uid);
       setUserEmail(user.email || null);
       setLocalOnly(false);
@@ -429,14 +437,14 @@ export default function NovelLibraryApp() {
       }
     });
 
-    // ถ้า onAuthStateChanged ไม่ทำงานภายใน 2 วินาที แสดงว่าไม่มี session
-    // → แสดงหน้าล็อกอิน
+    // ถ้า onAuthStateChanged ไม่ทำงานเลย (ไม่มี session)
+    // → แสดงหน้าล็อกอินหลัง 1.5 วินาที
     const loginTimeout = setTimeout(() => {
       if (!cancelled && !auth.currentUser) {
         setShowLogin(true);
         setIsLoaded(true);
       }
-    }, 2000);
+    }, 1500);
 
     return () => { cancelled = true; clearTimeout(loginTimeout); unsub(); };
   }, []);
@@ -477,6 +485,7 @@ export default function NovelLibraryApp() {
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
+      localStorage.setItem("novel-writer-auth-done", "1");
       setShowLogin(false);
     } catch (err) {
       console.error("Google sign-in failed:", err);
@@ -487,6 +496,7 @@ export default function NovelLibraryApp() {
   const handleAnonymousSignIn = async () => {
     try {
       await signInAnonymously(auth);
+      localStorage.setItem("novel-writer-auth-done", "1");
       setShowLogin(false);
     } catch (err) {
       console.error("Anonymous sign-in failed:", err);
@@ -497,6 +507,7 @@ export default function NovelLibraryApp() {
   const handleSignOut = async () => {
     try {
       await signOut(auth);
+      localStorage.removeItem("novel-writer-auth-done");
       setUserId(null);
       setUserEmail(null);
       setNovels(seedNovels);
