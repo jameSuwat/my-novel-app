@@ -429,18 +429,16 @@ export default function NovelLibraryApp() {
       }
     });
 
-    // ลองเข้าสู่ระบบอัตโนมัติ (ถ้าเคยล็อกอิน Google ไว้)
-    // ถ้ายังไม่เคย แสดงหน้าล็อกอิน
-    // onAuthStateChanged จะจัดการเองถ้ามี session อยู่
-    // ถ้าไม่มี session เลย จะแสดงหน้าล็อกอินหลัง isLoaded = true
-    setTimeout(() => {
+    // ถ้า onAuthStateChanged ไม่ทำงานภายใน 2 วินาที แสดงว่าไม่มี session
+    // → แสดงหน้าล็อกอิน
+    const loginTimeout = setTimeout(() => {
       if (!cancelled && !auth.currentUser) {
         setShowLogin(true);
         setIsLoaded(true);
       }
-    }, 3000); // รอ 3 วินาที ให้ onAuthStateChanged ทำงานก่อน
+    }, 2000);
 
-    return () => { cancelled = true; unsub(); };
+    return () => { cancelled = true; clearTimeout(loginTimeout); unsub(); };
   }, []);
 
   // ---------- Mirror ลง localStorage กันข้อมูลหาย ----------
