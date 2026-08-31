@@ -576,11 +576,11 @@ export default function NovelLibraryApp() {
 
   const handleMigrate = async () => {
     if (!migrateOldUid.trim()) {
-      alert("กรุณาใส่ UID เก่า");
+      alert("กรุณาเลือก UID ที่ต้องการย้ายก่อน");
       return;
     }
     if (!userId) {
-      alert("กรุณาล็อกอินด้วย Google ก่อน");
+      alert("กรุณาล็อกอินด้วย Google ก่อน แล้วค่อยกดย้ายข้อมูล");
       return;
     }
     setMigrateStatus("loading");
@@ -830,9 +830,7 @@ export default function NovelLibraryApp() {
                 <h3 style={{ margin: 0, fontFamily: "'Noto Serif Thai', serif", color: "#c9a15a" }}>📦 ย้ายข้อมูลจากบัญชีเก่า</h3>
                 <button onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); }} style={{ background: "none", border: "none", color: "#8b93a3", cursor: "pointer" }}><X size={18} /></button>
               </div>
-              {!userId ? (
-                <p style={{ color: "#8b93a3", fontSize: 14, textAlign: "center" }}>กรุณาล็อกอินด้วย Google ก่อน แล้วค่อยกดย้ายข้อมูล</p>
-              ) : migrateStatus === "done" ? (
+              {migrateStatus === "done" ? (
                 <div style={{ textAlign: "center" }}>
                   <p style={{ fontSize: 16, color: "#4caf50", marginBottom: 8 }}>✅ ย้ายข้อมูลสำเร็จ!</p>
                   <p style={{ fontSize: 13, color: "#8b93a3" }}>ย้ายนิยาย {migrateResult?.novelsCount || 0} เรื่อง 共 {migrateResult?.docsCount || 0} เอกสาร</p>
