@@ -817,81 +817,6 @@ export default function NovelLibraryApp() {
           ⚠️ ถ้าไม่ล็อกอิน ข้อมูลจะเก็บเฉพาะในเครื่องนี้
           เคลียร์ cache แล้วข้อมูลจะหาย
         </p>
-        <button
-          onClick={() => setShowMigrate(true)}
-          style={{ background: "transparent", border: "none", color: "#5c6372", fontSize: 12, cursor: "pointer", marginTop: 10, textDecoration: "underline" }}
-        >
-          📦 ย้ายข้อมูลจากบัญชีเก่า
-        </button>
-        {showMigrate && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); }}>
-            <div style={{ background: "#1e2330", border: "1px solid #3a4150", borderRadius: 16, padding: 28, maxWidth: 400, width: "90%", color: "#e8e3d8" }} onClick={(e) => e.stopPropagation()}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                <h3 style={{ margin: 0, fontFamily: "'Noto Serif Thai', serif", color: "#c9a15a" }}>📦 ย้ายข้อมูลจากบัญชีเก่า</h3>
-                <button onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); }} style={{ background: "none", border: "none", color: "#8b93a3", cursor: "pointer" }}><X size={18} /></button>
-              </div>
-              {migrateStatus === "done" ? (
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ fontSize: 16, color: "#4caf50", marginBottom: 8 }}>✅ ย้ายข้อมูลสำเร็จ!</p>
-                  <p style={{ fontSize: 13, color: "#8b93a3" }}>ย้ายนิยาย {migrateResult?.novelsCount || 0} เรื่อง 共 {migrateResult?.docsCount || 0} เอกสาร</p>
-                  <button onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); window.location.reload(); }} style={{ marginTop: 16, background: "#c9a15a", color: "#12161d", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer", fontWeight: 600 }}>รีเฟรชหน้า</button>
-                </div>
-              ) : migrateStatus === "error" ? (
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ fontSize: 16, color: "#ef5350", marginBottom: 8 }}>❌ ย้ายข้อมูลไม่สำเร็จ</p>
-                  <p style={{ fontSize: 13, color: "#8b93a3" }}>{migrateResult?.error || "ไม่พบข้อมูลในบัญชีเก่า"}</p>
-                  <button onClick={() => { setMigrateStatus(null); setMigrateResult(null); }} style={{ marginTop: 16, background: "#3a4150", color: "#e8e3d8", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer" }}>ลองใหม่</button>
-                </div>
-              ) : migrateStatus === "loading" ? (
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ fontSize: 14, color: "#c9a15a" }}>กำลังย้ายข้อมูล... ☁️</p>
-                  {migrateResult && <p style={{ fontSize: 12, color: "#8b93a3" }}>{migrateResult.done}/{migrateResult.total} เอกสาร</p>}
-                </div>
-              ) : (
-                <>
-                  <p style={{ fontSize: 13, color: "#8b93a3", marginBottom: 12 }}>สแกนหาบัญชีที่มีข้อมูล แล้วเลือกย้ายมาใส่บัญชี Google ปัจจุบัน</p>
-                  {scanStatus === "loading" && (
-                    <p style={{ fontSize: 14, color: "#c9a15a", textAlign: "center" }}>🔍 กำลังสแกน... </p>
-                  )}
-                  {scanStatus === "done" && scanResults && (
-                    <div style={{ marginBottom: 16 }}>
-                      {scanResults.length === 0 ? (
-                        <p style={{ fontSize: 13, color: "#8b93a3", textAlign: "center" }}>ไม่พบข้อมูลนิยายใน Firestore</p>
-                      ) : (
-                        <>
-                          <p style={{ fontSize: 12, color: "#4caf50", marginBottom: 8 }}>พบ {scanResults.length} บัญชีที่มีข้อมูล:</p>
-                          {scanResults.map((r) => (
-                            <div key={r.uid} onClick={() => setMigrateOldUid(r.uid)} style={{ background: migrateOldUid === r.uid ? "#2a3040" : "#12161d", border: migrateOldUid === r.uid ? "1px solid #c9a15a" : "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", marginBottom: 8, cursor: "pointer" }}>
-                              <div style={{ fontSize: 12, color: "#8b93a3", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{r.uid}</div>
-                              <div style={{ fontSize: 13, color: "#e8e3d8", marginTop: 4 }}>{r.novelsCount} เรื่อง — "{r.firstTitle}"</div>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  )}
-                  {scanStatus === "error" && (
-                    <p style={{ fontSize: 13, color: "#ef5350", marginBottom: 12 }}>❌ สแกนไม่สำเร็จ กรุณาลองใหม่</p>
-                  )}
-                  <input
-                    value={migrateOldUid}
-                    onChange={(e) => setMigrateOldUid(e.target.value)}
-                    placeholder="UID จะถูกเลือกอัตโนมัติเมื่อกดสแกน..."
-                    style={{ width: "100%", background: "#12161d", border: "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", color: "#e8e3d8", fontSize: 14, marginBottom: 12, fontFamily: "'JetBrains Mono', monospace" }}
-                  />
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={handleScan} style={{ flex: 1, background: "#3a4150", color: "#e8e3d8", border: "none", borderRadius: 8, padding: "12px", cursor: "pointer", fontSize: 14 }}>
-                      🔍 สแกนหา UID
-                    </button>
-                    <button onClick={handleMigrate} disabled={!migrateOldUid.trim()} style={{ flex: 1, background: migrateOldUid.trim() ? "#c9a15a" : "#3a4150", color: migrateOldUid.trim() ? "#12161d" : "#8b93a3", border: "none", borderRadius: 8, padding: "12px", cursor: migrateOldUid.trim() ? "pointer" : "not-allowed", fontWeight: 600, fontSize: 14 }}>
-                      📦 ย้ายข้อมูล
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -969,7 +894,77 @@ export default function NovelLibraryApp() {
           userId={userId}
           onSignOut={handleSignOut}
           onClose={() => setShowUserSettings(false)}
+          onOpenMigrate={() => { setShowUserSettings(false); setShowMigrate(true); }}
         />
+      )}
+      {showMigrate && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); setScanStatus(null); setScanResults(null); }}>
+          <div style={{ background: "#1e2330", border: "1px solid #3a4150", borderRadius: 16, padding: 28, maxWidth: 400, width: "90%", color: "#e8e3d8", maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontFamily: "'Noto Serif Thai', serif", color: "#c9a15a" }}>📦 ย้ายข้อมูลจากบัญชีเก่า</h3>
+              <button onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); setScanStatus(null); setScanResults(null); }} style={{ background: "none", border: "none", color: "#8b93a3", cursor: "pointer" }}><X size={18} /></button>
+            </div>
+            {migrateStatus === "done" ? (
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 16, color: "#4caf50", marginBottom: 8 }}>✅ ย้ายข้อมูลสำเร็จ!</p>
+                <p style={{ fontSize: 13, color: "#8b93a3" }}>ย้ายนิยาย {migrateResult?.novelsCount || 0} เรื่อง 共 {migrateResult?.docsCount || 0} เอกสาร</p>
+                <button onClick={() => { setShowMigrate(false); setMigrateStatus(null); setMigrateResult(null); setScanStatus(null); setScanResults(null); window.location.reload(); }} style={{ marginTop: 16, background: "#c9a15a", color: "#12161d", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer", fontWeight: 600 }}>รีเฟรชหน้า</button>
+              </div>
+            ) : migrateStatus === "error" ? (
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 16, color: "#ef5350", marginBottom: 8 }}>❌ ย้ายข้อมูลไม่สำเร็จ</p>
+                <p style={{ fontSize: 13, color: "#8b93a3" }}>{migrateResult?.error || "ไม่พบข้อมูลในบัญชีเก่า"}</p>
+                <button onClick={() => { setMigrateStatus(null); setMigrateResult(null); }} style={{ marginTop: 16, background: "#3a4150", color: "#e8e3d8", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer" }}>ลองใหม่</button>
+              </div>
+            ) : migrateStatus === "loading" ? (
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 14, color: "#c9a15a" }}>กำลังย้ายข้อมูล... ☁️</p>
+                {migrateResult && <p style={{ fontSize: 12, color: "#8b93a3" }}>{migrateResult.done}/{migrateResult.total} เอกสาร</p>}
+              </div>
+            ) : (
+              <>
+                <p style={{ fontSize: 13, color: "#8b93a3", marginBottom: 12 }}>สแกนหาบัญชีที่มีข้อมูล แล้วเลือกย้ายมาใส่บัญชี Google ปัจจุบัน</p>
+                {scanStatus === "loading" && (
+                  <p style={{ fontSize: 14, color: "#c9a15a", textAlign: "center" }}>🔍 กำลังสแกน...</p>
+                )}
+                {scanStatus === "done" && scanResults && (
+                  <div style={{ marginBottom: 16 }}>
+                    {scanResults.length === 0 ? (
+                      <p style={{ fontSize: 13, color: "#8b93a3", textAlign: "center" }}>ไม่พบข้อมูลนิยายใน Firestore</p>
+                    ) : (
+                      <>
+                        <p style={{ fontSize: 12, color: "#4caf50", marginBottom: 8 }}>พบ {scanResults.length} บัญชีที่มีข้อมูล:</p>
+                        {scanResults.map((r) => (
+                          <div key={r.uid} onClick={() => setMigrateOldUid(r.uid)} style={{ background: migrateOldUid === r.uid ? "#2a3040" : "#12161d", border: migrateOldUid === r.uid ? "1px solid #c9a15a" : "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", marginBottom: 8, cursor: "pointer" }}>
+                            <div style={{ fontSize: 12, color: "#8b93a3", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{r.uid}</div>
+                            <div style={{ fontSize: 13, color: "#e8e3d8", marginTop: 4 }}>{r.novelsCount} เรื่อง — "{r.firstTitle}"</div>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+                {scanStatus === "error" && (
+                  <p style={{ fontSize: 13, color: "#ef5350", marginBottom: 12 }}>❌ สแกนไม่สำเร็จ กรุณาลองใหม่</p>
+                )}
+                <input
+                  value={migrateOldUid}
+                  onChange={(e) => setMigrateOldUid(e.target.value)}
+                  placeholder="UID จะถูกเลือกอัตโนมัติเมื่อกดสแกน..."
+                  style={{ width: "100%", background: "#12161d", border: "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", color: "#e8e3d8", fontSize: 14, marginBottom: 12, fontFamily: "'JetBrains Mono', monospace" }}
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={handleScan} style={{ flex: 1, background: "#3a4150", color: "#e8e3d8", border: "none", borderRadius: 8, padding: "12px", cursor: "pointer", fontSize: 14 }}>
+                    🔍 สแกนหา UID
+                  </button>
+                  <button onClick={handleMigrate} disabled={!migrateOldUid.trim()} style={{ flex: 1, background: migrateOldUid.trim() ? "#c9a15a" : "#3a4150", color: migrateOldUid.trim() ? "#12161d" : "#8b93a3", border: "none", borderRadius: 8, padding: "12px", cursor: migrateOldUid.trim() ? "pointer" : "not-allowed", fontWeight: 600, fontSize: 14 }}>
+                    📦 ย้ายข้อมูล
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1382,7 +1377,7 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
 
 // ============================== User Settings Modal ==============================
 
-function UserSettingsModal({ userEmail, userId, onSignOut, onClose }) {
+function UserSettingsModal({ userEmail, userId, onSignOut, onClose, onOpenMigrate }) {
   const handleSignOut = () => {
     if (window.confirm("ออกจากระบบ? ข้อมูลจะยังอยู่ในคลาวด์ แต่ต้องล็อกอินใหม่เพื่อเข้าถึง")) {
       onSignOut();
@@ -1427,6 +1422,14 @@ function UserSettingsModal({ userEmail, userId, onSignOut, onClose }) {
             </div>
           )}
         </div>
+
+        {/* Migrate Button */}
+        <button
+          onClick={() => { onClose(); onOpenMigrate(); }}
+          style={{ width: "100%", background: "#1a1a2a", border: "1px solid #2a2a4a", color: "#8080e0", fontWeight: 600, fontSize: 14, padding: "14px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 10 }}
+        >
+          📦 ย้ายข้อมูลจากบัญชีเก่า
+        </button>
 
         {/* Sign Out Button */}
         <button
