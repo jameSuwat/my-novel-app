@@ -339,6 +339,7 @@ export default function NovelLibraryApp() {
     return !localStorage.getItem("novel-writer-auth-done");
   });
   const [userEmail, setUserEmail] = useState(null);
+  const [showUserSettings, setShowUserSettings] = useState(false);
   const fileInputRef = useRef(null);
 
   // ========== Theme (Dark/Light) ==========
@@ -749,6 +750,7 @@ export default function NovelLibraryApp() {
           onToggleTheme={toggleTheme}
           userEmail={userEmail}
           onSignOut={handleSignOut}
+          onOpenSettings={() => setShowUserSettings(true)}
         />
       ) : (
         <NovelView
@@ -791,13 +793,22 @@ export default function NovelLibraryApp() {
           onDelete={!isNewChapter ? () => deleteChapter(openChapter.id) : null}
         />
       )}
+
+      {showUserSettings && (
+        <UserSettingsModal
+          userEmail={userEmail}
+          userId={userId}
+          onSignOut={handleSignOut}
+          onClose={() => setShowUserSettings(false)}
+        />
+      )}
     </div>
   );
 }
 
 // ============================== Library View ==============================
 
-function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggleTheme, userEmail, onSignOut }) {
+function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggleTheme, userEmail, onSignOut, onOpenSettings }) {
   return (
     <div>
       <header style={{ padding: "28px 20px 16px", borderBottom: "1px solid #262d3a", position: "sticky", top: 0, background: "#12161dee", backdropFilter: "blur(6px)", zIndex: 10 }}>
@@ -809,16 +820,16 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggl
             </h1>
           </div>
           {userEmail && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11, color: "#7d8494", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userEmail}</span>
-              <button
-                onClick={onSignOut}
-                title="ออกจากระบบ"
-                style={{ background: "none", border: "1px solid #2a3140", borderRadius: 6, padding: "5px 8px", color: "#8b93a3", cursor: "pointer", fontSize: 11 }}
-              >
-                ออก
-              </button>
-            </div>
+            <button
+              onClick={onOpenSettings}
+              title="ตั้งค่าบัญชี"
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "#1b212b", border: "1px solid #2a3140", borderRadius: 8, padding: "6px 10px", cursor: "pointer", color: "#c9a15a" }}
+            >
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#c9a15a", color: "#1a140a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>
+                {userEmail.charAt(0).toUpperCase()}
+              </div>
+              <span style={{ fontSize: 12, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userEmail.split("@")[0]}</span>
+            </button>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#1b212b", border: "1px solid #2a3140", borderRadius: 10, padding: "9px 12px" }}>
@@ -1196,6 +1207,70 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
       >
         <Plus size={24} />
       </button>
+    </div>
+  );
+}
+
+// ============================== User Settings Modal ==============================
+
+function UserSettingsModal({ userEmail, userId, onSignOut, onClose }) {
+  const handleSignOut = () => {
+    if (window.confirm("ออกจากระบบ? ข้อมูลจะยังอยู่ในคลาวด์ แต่ต้องล็อกอินใหม่เพื่อเข้าถึง")) {
+      onSignOut();
+      onClose();
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#12161dee", backdropFilter: "blur(4px)", zIndex: 60, display: "flex", alignItems: "flex-end" }}>
+      <div style={{ width: "100%", background: "#1a202a", borderTop: "1px solid #2a3140", borderRadius: "16px 16px 0 0", padding: 20, maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <span style={{ fontFamily: "'Noto Serif Thai', serif", fontSize: 16, fontWeight: 600 }}>ตั้งค่าบัญชี</span>
+          <button onClick={onClose} aria-label="ปิด" style={{ background: "none", border: "none", color: "#9099a8", cursor: "pointer" }}>
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* User Info */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20, padding: 14, background: "#12161d", borderRadius: 10, border: "1px solid #2a3140" }}>
+          <div style={{ width: 48, height: 48, borderRadius: "50%", background: "linear-gradient(135deg, #c9a15a, #a8813f)", color: "#1a140a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 700, fontFamily: "'Noto Serif Thai', serif", flexShrink: 0 }}>
+            {userEmail ? userEmail.charAt(0).toUpperCase() : "?"}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#e8e3d8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {userEmail || "ผู้ใช้ไม่ระบุชื่อ"}
+            </div>
+            <div style={{ fontSize: 11, color: "#7d8494", marginTop: 2 }}>
+              {userEmail ? "ล็อกอินด้วย Google" : "ล็อกอินแบบไม่ระบุตัวตน"}
+            </div>
+          </div>
+        </div>
+
+        {/* Sync Status */}
+        <div style={{ padding: 12, background: userEmail ? "#1a2a1a" : "#2a1a0a", borderRadius: 8, border: `1px solid ${userEmail ? "#2a4a2a" : "#4a3a1a"}`, marginBottom: 20 }}>
+          <div style={{ fontSize: 13, color: userEmail ? "#8ac08a" : "#c0a060", display: "flex", alignItems: "center", gap: 6 }}>
+            {userEmail ? "✅" : "⚠️"}
+            <span>{userEmail ? "ข้อมูลจะ sync ข้ามเครื่องอัตโนมัติ" : "ข้อมูลเก็บเฉพาะในเครื่องนี้"}</span>
+          </div>
+          {!userEmail && (
+            <div style={{ fontSize: 11, color: "#a08040", marginTop: 6 }}>
+              เคลียร์ cache แล้วข้อมูลจะหาย แนะนำให้ล็อกอินด้วย Google
+            </div>
+          )}
+        </div>
+
+        {/* Sign Out Button */}
+        <button
+          onClick={handleSignOut}
+          style={{ width: "100%", background: "#2a1a1a", border: "1px solid #4a2a2a", color: "#e08080", fontWeight: 600, fontSize: 14, padding: "14px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+        >
+          ออกจากระบบ
+        </button>
+
+        <p style={{ fontSize: 11, color: "#5c6372", marginTop: 12, textAlign: "center" }}>
+          ข้อมูลของคุณปลอดภัยบน Firebase Cloud
+        </p>
+      </div>
     </div>
   );
 }
