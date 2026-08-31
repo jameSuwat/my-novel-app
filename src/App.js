@@ -460,6 +460,7 @@ export default function NovelLibraryApp() {
       setUserId(user.uid);
       setUserEmail(user.email || null);
       setLocalOnly(false);
+      setShowLogin(false); // มี session อยู่แล้ว → ข้ามหน้าล็อกอิน
       try {
         const snap = await getDocs(collection(db, "users", user.uid, "novels"));
         const loaded = [];
