@@ -305,18 +305,24 @@ const seedNovels = [
 
 const STORAGE_KEY = "novel-writer-app-data";
 
-// เขียนขึ้นคลาวด์เป็นชุด (batch ละไม่เกิน 400 ops) แทน await ทีละ doc
+// เขียน chapter ขึ้นคลาวด์ (ตัด field ที่ไม่จำเป็นออก)
+function stripChapter(ch) {
+  return { id: ch.id, order: ch.order, title: ch.title, content: ch.content, updatedAt: ch.updatedAt };
+}
+
+// เขียนขึ้นคลาวด์เป็นชุด (batch ละไม่เกิน 100 ops เพื่อไม่เกิน 5MB limit)
 async function pushAllToCloud(uid, novelList) {
   const ops = [];
   for (const n of novelList) {
     ops.push({ ref: doc(db, "users", uid, "novels", n.id), data: stripForCloud(n) });
     for (const ch of n.chapters || []) {
-      ops.push({ ref: doc(db, "users", uid, "novels", n.id, "chapters", ch.id), data: ch });
+      ops.push({ ref: doc(db, "users", uid, "novels", n.id, "chapters", ch.id), data: stripChapter(ch) });
     }
   }
-  for (let i = 0; i < ops.length; i += 400) {
+  for (let i = 0; i < ops.length; i += 100) {
     const batch = writeBatch(db);
-    ops.slice(i, i + 400).forEach((op) => batch.set(op.ref, op.data));    await batch.commit();
+    ops.slice(i, i + 100).forEach((op) => batch.set(op.ref, op.data));
+    await batch.commit();
   }
 }
 
@@ -427,7 +433,7 @@ export default function NovelLibraryApp() {
     if (userId && currentId) {
       try {
         for (const ch of updatedChapters) {
-          await setDoc(doc(db, "users", userId, "novels", currentId, "chapters", ch.id), ch);
+          await setDoc(doc(db, "users", userId, "novels", currentId, "chapters", ch.id), stripChapter(ch));
         }
       } catch (e) { console.error("Reorder sync failed:", e); markSyncFailed(); }
     }
@@ -722,7 +728,7 @@ export default function NovelLibraryApp() {
 
   async function persistChapterDoc(novelId, chapter) {
     if (userId) {
-      await setDoc(doc(db, "users", userId, "novels", novelId, "chapters", chapter.id), chapter);
+      await setDoc(doc(db, "users", userId, "novels", novelId, "chapters", chapter.id), stripChapter(chapter));
     }
   }
 
