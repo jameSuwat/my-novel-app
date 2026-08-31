@@ -700,6 +700,26 @@ export default function NovelLibraryApp() {
     setIsNewChapter(true);
   }
 
+  async function importTxtFiles(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !current) return;
+    const chapters = current.chapters || [];
+    let nextOrder = chapters.length ? Math.max(...chapters.map((c) => c.order)) + 1 : 1;
+    const newChapters = [];
+    for (const file of files) {
+      const content = await file.text();
+      const title = file.name.replace(/\.txt$/i, "");
+      const ch = { id: `c-${Date.now()}-${nextOrder}`, order: nextOrder, title, content, updatedAt: Date.now() };
+      newChapters.push(ch);
+      await persistChapterDoc(current.id, ch);
+      nextOrder++;
+    }
+    setNovels((prev) =>
+      prev.map((n) => n.id === current.id ? { ...n, chapters: [...(n.chapters || []), ...newChapters] } : n)
+    );
+    e.target.value = ""; // reset input
+  }
+
   async function persistChapterDoc(novelId, chapter) {
     if (userId) {
       await setDoc(doc(db, "users", userId, "novels", novelId, "chapters", chapter.id), chapter);
@@ -861,6 +881,7 @@ export default function NovelLibraryApp() {
             setIsNewChapter(isNew);
           }}
           onAddChapter={addChapter}
+          onImportTxt={importTxtFiles}
           onForceSave={forceSaveToCloud}
           onReorderChapters={reorderChapters}
           theme={theme}
@@ -1083,7 +1104,7 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggl
 
 // ============================== Novel View ==============================
 
-function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onForceSave, onReorderChapters, theme, onToggleTheme }) {
+function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInfo, onCoverPick, onOpenChapter, onAddChapter, onImportTxt, onForceSave, onReorderChapters, theme, onToggleTheme }) {
   const chapters = useMemo(() => novel.chapters || [], [novel.chapters]);
   const sorted = useMemo(() => [...chapters].sort((a, b) => (a.order || 0) - (b.order || 0)), [chapters]);
   const [savedAlert, setSavedAlert] = useState(false);
@@ -1300,7 +1321,32 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
                 </button>
               </>
             )}
+            <button
+              onClick={() => document.getElementById('import-txt-input')?.click()}
+              title="นำเข้าไฟล์ .txt เป็นตอนใหม่"
+              style={{
+                background: "#1b212b",
+                border: "1px solid #2a3140",
+                color: "#8080e0",
+                borderRadius: 8,
+                padding: "5px 12px",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              📥 นำเข้า .txt
+            </button>
           </div>
+          <input
+            id="import-txt-input"
+            type="file"
+            accept=".txt"
+            multiple
+            onChange={onImportTxt}
+            style={{ display: "none" }}
+          />
         </div>
 
         {sorted.length === 0 ? (
