@@ -182,7 +182,7 @@ function useDebouncedValue(value, delay = 300) {
   return debounced;
 }
 
-function compressImage(base64Str, maxWidth = 200, quality = 0.6) {
+function compressImage(base64Str, maxWidth = 300, quality = 0.7) {
   return new Promise((resolve) => {
     if (!base64Str || !base64Str.startsWith("data:image")) {
       resolve(base64Str);
