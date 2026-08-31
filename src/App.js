@@ -273,6 +273,19 @@ function stripChapters(novel) {
   return meta;
 }
 
+// ตัด cover (base64 image) ออกก่อนขึ้น Firestore — Firestore มี doc limit 1MB
+// cover จะเก็บเฉพาะใน localStorage เท่านั้น เพื่อไม่ให้ document ใหญ่เกินไป
+function stripCoverForCloud(novel) {
+  const { cover, ...rest } = novel;
+  return rest;
+}
+
+// ตัดทั้ง chapters และ cover ออกสำหรับการ sync ขึ้น cloud
+function stripForCloud(novel) {
+  const { chapters, cover, ...meta } = novel;
+  return meta;
+}
+
 // ============================== Data ==============================
 
 const seedNovels = [
@@ -295,7 +308,7 @@ const STORAGE_KEY = "novel-writer-app-data";
 async function pushAllToCloud(uid, novelList) {
   const ops = [];
   for (const n of novelList) {
-    ops.push({ ref: doc(db, "users", uid, "novels", n.id), data: stripChapters(n) });
+    ops.push({ ref: doc(db, "users", uid, "novels", n.id), data: stripForCloud(n) });
     for (const ch of n.chapters || []) {
       ops.push({ ref: doc(db, "users", uid, "novels", n.id, "chapters", ch.id), data: ch });
     }
@@ -477,7 +490,7 @@ export default function NovelLibraryApp() {
 
     if (merged && userId) {
       try {
-        await setDoc(doc(db, "users", userId, "novels", id), stripChapters(merged));
+        await setDoc(doc(db, "users", userId, "novels", id), stripForCloud(merged));
       } catch (err) {
         console.error("Sync error:", err);
         markSyncFailed();
@@ -500,7 +513,7 @@ export default function NovelLibraryApp() {
       if (userId) {
         try {
           // ขึ้น doc หลักเฉพาะ meta — ไม่ส่ง chapters: [] ขึ้นไป
-          await setDoc(doc(db, "users", userId, "novels", id), stripChapters(newNovel));
+          await setDoc(doc(db, "users", userId, "novels", id), stripForCloud(newNovel));
         } catch (e) {
           console.error(e);
           markSyncFailed();
