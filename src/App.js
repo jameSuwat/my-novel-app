@@ -738,6 +738,7 @@ export default function NovelLibraryApp() {
           theme={theme}
           onToggleTheme={toggleTheme}
           userEmail={userEmail}
+          userId={userId}
           onSignOut={handleSignOut}
           onOpenSettings={() => setShowUserSettings(true)}
         />
@@ -797,7 +798,7 @@ export default function NovelLibraryApp() {
 
 // ============================== Library View ==============================
 
-function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggleTheme, userEmail, onSignOut, onOpenSettings }) {
+function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggleTheme, userEmail, userId, onSignOut, onOpenSettings }) {
   return (
     <div>
       <header style={{ padding: "28px 20px 16px", borderBottom: "1px solid #262d3a", position: "sticky", top: 0, background: "#12161dee", backdropFilter: "blur(6px)", zIndex: 10 }}>
@@ -808,16 +809,16 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggl
               หิ้งนิยายของฉัน
             </h1>
           </div>
-          {userEmail && (
+          {userId && (
             <button
               onClick={onOpenSettings}
               title="ตั้งค่าบัญชี"
               style={{ display: "flex", alignItems: "center", gap: 6, background: "#1b212b", border: "1px solid #2a3140", borderRadius: 8, padding: "6px 10px", cursor: "pointer", color: "#c9a15a" }}
             >
-              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#c9a15a", color: "#1a140a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>
-                {userEmail.charAt(0).toUpperCase()}
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: userEmail ? "#c9a15a" : "#5c6372", color: "#1a140a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>
+                {userEmail ? userEmail.charAt(0).toUpperCase() : "👤"}
               </div>
-              <span style={{ fontSize: 12, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userEmail.split("@")[0]}</span>
+              <span style={{ fontSize: 12, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userEmail ? userEmail.split("@")[0] : "บัญชี"}</span>
             </button>
           )}
         </div>
