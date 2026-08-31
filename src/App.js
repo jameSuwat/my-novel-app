@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 import { ChevronLeft, ChevronRight, ArrowRight, Plus, Pencil, Image as ImageIcon, X, Trash2, Clock, BookOpen, Search, Feather, GripVertical } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc, writeBatch } from "firebase/firestore";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCyZuVUuCeZ-5Fajn4P0WTWdCI2ceHG4pI",
@@ -334,6 +334,8 @@ export default function NovelLibraryApp() {
   const [editingNovelInfo, setEditingNovelInfo] = useState(null);
   const [openChapter, setOpenChapter] = useState(null);
   const [isNewChapter, setIsNewChapter] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [userEmail, setUserEmail] = useState(null);
   const fileInputRef = useRef(null);
 
   // ========== Theme (Dark/Light) ==========
@@ -387,6 +389,7 @@ export default function NovelLibraryApp() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user || cancelled) return;
       setUserId(user.uid);
+      setUserEmail(user.email || null);
       setLocalOnly(false);
       try {
         const snap = await getDocs(collection(db, "users", user.uid, "novels"));
@@ -426,13 +429,16 @@ export default function NovelLibraryApp() {
       }
     });
 
-    signInAnonymously(auth).catch((err) => {
-      console.error("Anonymous sign-in failed:", err);
-      if (cancelled) return;
-      setLocalOnly(true);
-      loadLocalFallback();
-      setIsLoaded(true);
-    });
+    // ลองเข้าสู่ระบบอัตโนมัติ (ถ้าเคยล็อกอิน Google ไว้)
+    // ถ้ายังไม่เคย แสดงหน้าล็อกอิน
+    // onAuthStateChanged จะจัดการเองถ้ามี session อยู่
+    // ถ้าไม่มี session เลย จะแสดงหน้าล็อกอินหลัง isLoaded = true
+    setTimeout(() => {
+      if (!cancelled && !auth.currentUser) {
+        setShowLogin(true);
+        setIsLoaded(true);
+      }
+    }, 3000); // รอ 3 วินาที ให้ onAuthStateChanged ทำงานก่อน
 
     return () => { cancelled = true; unsub(); };
   }, []);
@@ -465,6 +471,40 @@ export default function NovelLibraryApp() {
       setTimeout(() => {
         alert(`❌ บันทึกไม่สำเร็จ: ${e?.message || "เกิดข้อผิดพลาดในการบันทึก"}`);
       }, 50);
+    }
+  };
+
+  // ========== Google Sign-In ==========
+  const handleGoogleSignIn = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      setShowLogin(false);
+    } catch (err) {
+      console.error("Google sign-in failed:", err);
+      alert("เข้าสู่ระบบไม่สำเร็จ: " + err.message);
+    }
+  };
+
+  const handleAnonymousSignIn = async () => {
+    try {
+      await signInAnonymously(auth);
+      setShowLogin(false);
+    } catch (err) {
+      console.error("Anonymous sign-in failed:", err);
+      alert("เข้าสู่ระบบไม่สำเร็จ: " + err.message);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      setUserId(null);
+      setUserEmail(null);
+      setNovels(seedNovels);
+      setShowLogin(true);
+    } catch (err) {
+      console.error("Sign out failed:", err);
     }
   };
 
@@ -649,6 +689,35 @@ export default function NovelLibraryApp() {
     );
   }
 
+  // แสดงหน้าล็อกอินถ้ายังไม่ได้เข้าสู่ระบบ
+  if (!userId && showLogin) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#12161d", color: "#e8e3d8", fontFamily: "'Sarabun', sans-serif", padding: 20 }}>
+        <Feather size={40} color="#c9a15a" style={{ marginBottom: 20 }} />
+        <h1 style={{ fontFamily: "'Noto Serif Thai', serif", fontWeight: 700, fontSize: 24, marginBottom: 8, color: "#c9a15a" }}>หิ้งนิยายของฉัน</h1>
+        <p style={{ fontSize: 14, color: "#8b93a3", marginBottom: 30, textAlign: "center" }}>เข้าสู่ระบบเพื่อบันทึกข้อมูลขึ้นคลาวด์
+ข้อมูลจะไม่หายเมื่อเปลี่ยนเครื่อง</p>
+        <button
+          onClick={handleGoogleSignIn}
+          style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "none", borderRadius: 10, padding: "14px 28px", cursor: "pointer", fontSize: 15, fontWeight: 600, color: "#333", marginBottom: 14, width: "100%", maxWidth: 320, justifyContent: "center" }}
+        >
+          <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/><path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/><path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/></svg>
+          เข้าสู่ระบบด้วย Google
+        </button>
+        <button
+          onClick={handleAnonymousSignIn}
+          style={{ background: "transparent", border: "1px solid #3a4150", borderRadius: 10, padding: "12px 28px", cursor: "pointer", fontSize: 14, color: "#8b93a3", width: "100%", maxWidth: 320 }}
+        >
+          เข้าใช้งานโดยไม่ล็อกอิน
+        </button>
+        <p style={{ fontSize: 11, color: "#5c6372", marginTop: 16, textAlign: "center", maxWidth: 320 }}>
+          ⚠️ ถ้าไม่ล็อกอิน ข้อมูลจะเก็บเฉพาะในเครื่องนี้
+          เคลียร์ cache แล้วข้อมูลจะหาย
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div style={{ fontFamily: "'Sarabun', sans-serif", background: theme === 'dark' ? '#12161d' : '#f8f6f1', minHeight: '100vh', color: theme === 'dark' ? '#e8e3d8' : '#2a2318' }}>
       {/* แนะนำ: ย้ายการโหลดฟอนต์ไปเป็น <link> ใน index.html จะเร็วกว่า @import */}
@@ -669,6 +738,8 @@ export default function NovelLibraryApp() {
           onCreate={() => setEditingNovelInfo("new")}
           theme={theme}
           onToggleTheme={toggleTheme}
+          userEmail={userEmail}
+          onSignOut={handleSignOut}
         />
       ) : (
         <NovelView
@@ -717,15 +788,29 @@ export default function NovelLibraryApp() {
 
 // ============================== Library View ==============================
 
-function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggleTheme }) {
+function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggleTheme, userEmail, onSignOut }) {
   return (
     <div>
       <header style={{ padding: "28px 20px 16px", borderBottom: "1px solid #262d3a", position: "sticky", top: 0, background: "#12161dee", backdropFilter: "blur(6px)", zIndex: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-          <Feather size={22} color="#c9a15a" />
-          <h1 style={{ fontFamily: "'Noto Serif Thai', serif", fontWeight: 700, fontSize: 22, margin: 0, letterSpacing: 0.3 }}>
-            หิ้งนิยายของฉัน
-          </h1>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Feather size={22} color="#c9a15a" />
+            <h1 style={{ fontFamily: "'Noto Serif Thai', serif", fontWeight: 700, fontSize: 22, margin: 0, letterSpacing: 0.3 }}>
+              หิ้งนิยายของฉัน
+            </h1>
+          </div>
+          {userEmail && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, color: "#7d8494", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userEmail}</span>
+              <button
+                onClick={onSignOut}
+                title="ออกจากระบบ"
+                style={{ background: "none", border: "1px solid #2a3140", borderRadius: 6, padding: "5px 8px", color: "#8b93a3", cursor: "pointer", fontSize: 11 }}
+              >
+                ออก
+              </button>
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#1b212b", border: "1px solid #2a3140", borderRadius: 10, padding: "9px 12px" }}>
           <Search size={16} color="#8b93a3" />
