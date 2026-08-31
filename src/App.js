@@ -360,6 +360,29 @@ async function migrateFromOldAccount(oldUid, newUid, onProgress) {
   return { novelsCount: novelsSnap.docs.length, docsCount: totalDocs };
 }
 
+// สแกนหา UID ที่มีข้อมูลนิยายใน Firestore
+async function scanUsersWithData() {
+  const usersRef = collection(db, "users");
+  const usersSnap = await getDocs(usersRef);
+  const results = [];
+  
+  for (const userDoc of usersSnap.docs) {
+    const uid = userDoc.id;
+    const novelsRef = collection(db, "users", uid, "novels");
+    const novelsSnap = await getDocs(novelsRef);
+    if (!novelsSnap.empty) {
+      // ดึงชื่อนิยายเรื่องแรกเป็นตัวอย่าง
+      const firstNovel = novelsSnap.docs[0]?.data();
+      results.push({
+        uid,
+        novelsCount: novelsSnap.docs.length,
+        firstTitle: firstNovel?.title || "(ไม่มีชื่อ)",
+      });
+    }
+  }
+  return results;
+}
+
 // ============================== Main Component ==============================
 
 export default function NovelLibraryApp() {
@@ -380,6 +403,8 @@ export default function NovelLibraryApp() {
   const [migrateOldUid, setMigrateOldUid] = useState("");
   const [migrateStatus, setMigrateStatus] = useState(null); // null | 'loading' | 'done' | 'error'
   const [migrateResult, setMigrateResult] = useState(null);
+  const [scanStatus, setScanStatus] = useState(null); // null | 'loading' | 'done' | 'error'
+  const [scanResults, setScanResults] = useState(null);
   const fileInputRef = useRef(null);
 
   // ========== Theme (Dark/Light) ==========
@@ -569,6 +594,19 @@ export default function NovelLibraryApp() {
       console.error("Migration failed:", err);
       setMigrateStatus("error");
       setMigrateResult({ error: err.message });
+    }
+  };
+
+  const handleScan = async () => {
+    setScanStatus("loading");
+    try {
+      const results = await scanUsersWithData();
+      setScanResults(results);
+      setScanStatus("done");
+    } catch (err) {
+      console.error("Scan failed:", err);
+      setScanStatus("error");
+      setScanResults(null);
     }
   };
 
@@ -813,17 +851,44 @@ export default function NovelLibraryApp() {
                 </div>
               ) : (
                 <>
-                  <p style={{ fontSize: 13, color: "#8b93a3", marginBottom: 12 }}>ใส่ UID เก่า (Anonymous) ที่ต้องการย้ายข้อมูลมาใส่บัญชี Google ปัจจุบัน</p>
-                  <p style={{ fontSize: 11, color: "#5c6372", marginBottom: 12 }}>วิธีหา UID: Firebase Console → Authentication → Users → คัดลอก UID ของ Anonymous</p>
+                  <p style={{ fontSize: 13, color: "#8b93a3", marginBottom: 12 }}>สแกนหาบัญชีที่มีข้อมูล แล้วเลือกย้ายมาใส่บัญชี Google ปัจจุบัน</p>
+                  {scanStatus === "loading" && (
+                    <p style={{ fontSize: 14, color: "#c9a15a", textAlign: "center" }}>🔍 กำลังสแกน... </p>
+                  )}
+                  {scanStatus === "done" && scanResults && (
+                    <div style={{ marginBottom: 16 }}>
+                      {scanResults.length === 0 ? (
+                        <p style={{ fontSize: 13, color: "#8b93a3", textAlign: "center" }}>ไม่พบข้อมูลนิยายใน Firestore</p>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: 12, color: "#4caf50", marginBottom: 8 }}>พบ {scanResults.length} บัญชีที่มีข้อมูล:</p>
+                          {scanResults.map((r) => (
+                            <div key={r.uid} onClick={() => setMigrateOldUid(r.uid)} style={{ background: migrateOldUid === r.uid ? "#2a3040" : "#12161d", border: migrateOldUid === r.uid ? "1px solid #c9a15a" : "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", marginBottom: 8, cursor: "pointer" }}>
+                              <div style={{ fontSize: 12, color: "#8b93a3", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{r.uid}</div>
+                              <div style={{ fontSize: 13, color: "#e8e3d8", marginTop: 4 }}>{r.novelsCount} เรื่อง — "{r.firstTitle}"</div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {scanStatus === "error" && (
+                    <p style={{ fontSize: 13, color: "#ef5350", marginBottom: 12 }}>❌ สแกนไม่สำเร็จ กรุณาลองใหม่</p>
+                  )}
                   <input
                     value={migrateOldUid}
                     onChange={(e) => setMigrateOldUid(e.target.value)}
-                    placeholder="ใส่ UID เก่า..."
-                    style={{ width: "100%", background: "#12161d", border: "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", color: "#e8e3d8", fontSize: 14, marginBottom: 16, fontFamily: "'JetBrains Mono', monospace" }}
+                    placeholder="UID จะถูกเลือกอัตโนมัติเมื่อกดสแกน..."
+                    style={{ width: "100%", background: "#12161d", border: "1px solid #3a4150", borderRadius: 8, padding: "10px 12px", color: "#e8e3d8", fontSize: 14, marginBottom: 12, fontFamily: "'JetBrains Mono', monospace" }}
                   />
-                  <button onClick={handleMigrate} style={{ width: "100%", background: "#c9a15a", color: "#12161d", border: "none", borderRadius: 8, padding: "12px", cursor: "pointer", fontWeight: 600, fontSize: 14 }}>
-                    ย้ายข้อมูล
-                  </button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={handleScan} style={{ flex: 1, background: "#3a4150", color: "#e8e3d8", border: "none", borderRadius: 8, padding: "12px", cursor: "pointer", fontSize: 14 }}>
+                      🔍 สแกนหา UID
+                    </button>
+                    <button onClick={handleMigrate} disabled={!migrateOldUid.trim()} style={{ flex: 1, background: migrateOldUid.trim() ? "#c9a15a" : "#3a4150", color: migrateOldUid.trim() ? "#12161d" : "#8b93a3", border: "none", borderRadius: 8, padding: "12px", cursor: migrateOldUid.trim() ? "pointer" : "not-allowed", fontWeight: 600, fontSize: 14 }}>
+                      📦 ย้ายข้อมูล
+                    </button>
+                  </div>
                 </>
               )}
             </div>
