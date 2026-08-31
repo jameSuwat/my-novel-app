@@ -182,7 +182,7 @@ function useDebouncedValue(value, delay = 300) {
   return debounced;
 }
 
-function compressImage(base64Str, maxWidth = 300, quality = 0.7) {
+function compressImage(base64Str, maxWidth = 80, quality = 0.4) {
   return new Promise((resolve) => {
     if (!base64Str || !base64Str.startsWith("data:image")) {
       resolve(base64Str);
@@ -280,11 +280,10 @@ function stripCoverForCloud(novel) {
   return rest;
 }
 
-// ตัดทั้ง chapters และ cover ออกสำหรับการ sync ขึ้น cloud
-// ต้องตั้ง cover: null เพื่อลบ cover เดิมที่ Firestore มีอยู่แล้ว (ไม่งั้น field เดิมจะยังอยู่)
+// ตัด chapters ออกสำหรับการ sync ขึ้น cloud (cover เก็บไว้因為 compress แล้วเล็กพอ)
 function stripForCloud(novel) {
-  const { chapters, cover, ...meta } = novel;
-  return { ...meta, cover: null };
+  const { chapters, ...meta } = novel;
+  return meta;
 }
 
 // ============================== Data ==============================
