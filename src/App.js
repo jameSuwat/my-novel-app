@@ -823,7 +823,7 @@ export default function NovelLibraryApp() {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#12161d", color: "#e8e3d8", fontFamily: "'Sarabun', sans-serif", padding: 20 }}>
         <Feather size={40} color="#c9a15a" style={{ marginBottom: 20 }} />
-        <h1 style={{ fontFamily: "'Noto Serif Thai', serif", fontWeight: 700, fontSize: 24, marginBottom: 8, color: "#c9a15a" }}>หิ้งนิยายของฉัน</h1>
+        <h1 style={{ fontFamily: "'Noto Serif Thai', serif", fontWeight: 700, fontSize: 24, marginBottom: 8, color: "#c9a15a" }}>บันทึกนิยาย</h1>
         <p style={{ fontSize: 14, color: "#8b93a3", marginBottom: 30, textAlign: "center" }}>เข้าสู่ระบบเพื่อบันทึกข้อมูลขึ้นคลาวด์
 ข้อมูลจะไม่หายเมื่อเปลี่ยนเครื่อง</p>
         <button
@@ -1007,7 +1007,7 @@ function LibraryView({ novels, query, setQuery, onOpen, onCreate, theme, onToggl
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Feather size={22} color="#c9a15a" />
             <h1 style={{ fontFamily: "'Noto Serif Thai', serif", fontWeight: 700, fontSize: 22, margin: 0, letterSpacing: 0.3 }}>
-              หิ้งนิยายของฉัน
+              บันทึกนิยาย
             </h1>
           </div>
           {userId && (
@@ -1196,7 +1196,7 @@ function NovelView({ novel, fileInputRef, unsynced, localOnly, onBack, onEditInf
       <div style={{ position: "sticky", top: 0, zIndex: 10, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#12161dee", backdropFilter: "blur(6px)", width: "100%" }}>
         <button
           onClick={onBack}
-          aria-label="กลับไปหิ้งนิยาย"
+          aria-label="กลับไปบันทึกนิยาย"
           style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", color: "#c9a15a", padding: "16px 18px", fontSize: 14, cursor: "pointer" }}
         >
           <ChevronLeft size={18} /> หิ้งนิยาย
